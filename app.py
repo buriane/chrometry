@@ -16,42 +16,42 @@ def save_plot_to_file(
     faktor_skala: float
 ) -> str:
     """
-    Save the visualization plot to a temporary file and return its path.
+    Menyimpan plot visualisasi ke file sementara dan mengembalikan jalurnya.
     
     Args:
-        citra_asli (np.ndarray): Original grayscale image.
-        citra_threshold (np.ndarray): Thresholded image.
-        citra_base (np.ndarray): Base grayscale image without colored contours.
-        citra_proses_rgb (np.ndarray): RGB image with colored contours.
-        kontur (List[np.ndarray]): List of detected contours.
-        faktor_skala (float): Scaling factor used for resizing.
+        citra_asli (np.ndarray): Citra grayscale asli.
+        citra_threshold (np.ndarray): Citra hasil threshold.
+        citra_base (np.ndarray): Citra grayscale dasar tanpa kontur berwarna.
+        citra_proses_rgb (np.ndarray): Citra RGB dengan kontur berwarna.
+        kontur (List[np.ndarray]): Daftar kontur yang terdeteksi.
+        faktor_skala (float): Faktor skala untuk mengubah ukuran citra.
         
     Returns:
-        str: Path to the saved plot image.
+        str: Jalur ke file plot yang disimpan.
     """
     plt.figure(figsize=(15, 10))
     
-    # Display original image (resized for comparison)
+    # Tampilkan citra asli (diubah ukurannya untuk perbandingan)
     citra_asli_diubah = ubah_ukuran_citra(citra_asli, faktor_skala)
     plt.subplot(231)
     plt.imshow(citra_asli_diubah, cmap='gray')
     plt.title('Citra Asli')
     plt.axis('off')
     
-    # Display thresholded image
+    # Tampilkan citra hasil threshold
     plt.subplot(232)
     plt.imshow(citra_threshold, cmap='gray')
     plt.title('Threshold')
     plt.axis('off')
     
-    # Display image with contours in RGB
+    # Tampilkan citra dengan kontur dalam RGB
     plt.subplot(233)
     plt.imshow(citra_proses_rgb)
     plt.title('Kontur (Garis Hijau)')
     plt.axis('off')
     
     if kontur:
-        # Display center point and polygon approximation
+        # Tampilkan titik pusat dan aproksimasi poligon
         momen = cv.moments(kontur[0])
         if momen['m00'] != 0:
             pusat_x = int(momen['m10'] / momen['m00'])
@@ -70,7 +70,7 @@ def save_plot_to_file(
             plt.legend()
             plt.axis('off')
         
-        # Display convex hull
+        # Tampilkan convex hull
         convex_hull = cv.convexHull(kontur[0])
         titik_hull = np.concatenate((convex_hull[:, 0, :], convex_hull[:1, 0, :]), axis=0)
         plt.subplot(235)
@@ -80,7 +80,7 @@ def save_plot_to_file(
         plt.legend()
         plt.axis('off')
         
-        # Display bounding rectangle
+        # Tampilkan kotak pembatas
         x, y, lebar, tinggi = cv.boundingRect(kontur[0])
         citra_dengan_kotak = citra_base.copy()
         cv.rectangle(citra_dengan_kotak, (x, y), (x + lebar, y + tinggi), (255), 2)
@@ -91,62 +91,99 @@ def save_plot_to_file(
     
     plt.tight_layout()
     
-    # Save plot to temporary file
+    # Simpan plot ke file sementara
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
     plt.savefig(temp_file.name, bbox_inches='tight')
     plt.close()
     return temp_file.name
 
 def main():
-    st.title("Contour Detection Web App")
-    st.write("Upload an image to detect contours and visualize the results.")
+    st.title("Aplikasi Web Deteksi Kontur")
+    st.write("Unggah citra untuk mendeteksi kontur dan melihat hasil visualisasinya.")
     
-    # File uploader
-    uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+    # Bagian penjelasan program
+    st.subheader("Tentang Program")
+    st.markdown("""
+    Aplikasi ini dirancang untuk mendeteksi dan menganalisis kontur pada citra menggunakan pemrosesan citra digital. Berikut adalah fitur utama program:
+
+    - **Unggah Citra**: Pengguna dapat mengunggah citra dalam format JPG, JPEG, atau PNG.
+    - **Penyesuaian Skala**: Sesuaikan faktor skala citra untuk mengubah ukuran citra menggunakan slider.
+    - **Deteksi Kontur**: Program mendeteksi kontur pada citra menggunakan algoritma OpenCV, termasuk penerapan threshold dan dilasi.
+    - **Analisis Kontur**: Menampilkan informasi seperti luas kontur, keliling kontur, dan jumlah titik kontur.
+    - **Visualisasi**: Menampilkan hasil dalam enam subplot:
+        1. Citra asli
+        2. Citra hasil threshold
+        3. Citra dengan kontur berwarna hijau
+        4. Titik pusat dan aproksimasi poligon
+        5. Convex hull
+        6. Kotak pembatas
+    - **Unduh Contoh Citra**: Pengguna dapat mengunduh citra contoh (`tesla.png` dan `tesla.jpg`) untuk pengujian.
+
+    Program ini menggunakan **OpenCV** untuk pemrosesan citra, **Matplotlib** untuk visualisasi, dan **Streamlit** sebagai antarmuka web. Citra diolah dalam format grayscale, dan hasilnya disimpan sementara untuk ditampilkan di web.
+    """)
     
-    # Slider for scaling factor
-    faktor_skala = st.slider("Scaling Factor", min_value=1.0, max_value=10.0, value=4.0, step=0.1)
+    # Tombol unduh untuk tesla.png dan tesla.jpg
+    st.subheader("Unduh Contoh Citra")
+    images_folder = "images"
+    for image_name in ["tesla.png", "tesla.jpg"]:
+        image_path = os.path.join(images_folder, image_name)
+        if os.path.exists(image_path):
+            with open(image_path, "rb") as file:
+                st.download_button(
+                    label=f"Unduh {image_name}",
+                    data=file,
+                    file_name=image_name,
+                    mime="image/png" if image_name.endswith(".png") else "image/jpeg"
+                )
+        else:
+            st.warning(f"File {image_name} tidak ditemukan di folder {images_folder}.")
+    
+    # Pengunggah citra
+    uploaded_file = st.file_uploader("Pilih citra...", type=["jpg", "jpeg", "png"], help="Unggah citra dalam format JPG, JPEG, atau PNG")
+    
+    # Slider untuk faktor skala
+    faktor_skala = st.slider("Faktor Skala", min_value=1.0, max_value=10.0, value=4.0, step=0.1, help="Atur faktor skala untuk mengubah ukuran citra")
     
     if uploaded_file is not None:
         try:
-            # Save uploaded file to temporary location
+            # Simpan file yang diunggah ke lokasi sementara
             with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
                 temp_file.write(uploaded_file.read())
                 temp_file_path = temp_file.name
             
-            # Process image using contour.py functions
+            # Proses citra menggunakan fungsi dari contour.py
             citra_asli = muat_citra(temp_file_path)
             citra_diubah_ukuran = ubah_ukuran_citra(citra_asli, faktor_skala)
             citra_threshold, kontur = proses_kontur(citra_diubah_ukuran)
             
             if not kontur:
-                st.error("No contours found in the image.")
+                st.error("Tidak ada kontur yang ditemukan pada citra.")
                 os.unlink(temp_file_path)
                 return
             
-            # Prepare images for visualization
+            # Siapkan citra untuk visualisasi
             citra_base = citra_diubah_ukuran.copy()
             citra_proses_rgb = cv.cvtColor(citra_diubah_ukuran, cv.COLOR_GRAY2RGB)
             cv.drawContours(citra_proses_rgb, kontur, -1, (0, 255, 0), 10)
             
-            # Display contour analysis
-            st.subheader("Contour Analysis")
+            # Tampilkan analisis kontur
+            st.subheader("Analisis Kontur")
             luas = cv.contourArea(kontur[0])
             keliling = cv.arcLength(kontur[0], True)
-            st.write(f"**Contour Area:** {luas:.2f} pixels")
-            st.write(f"**Contour Perimeter:** {keliling:.2f} pixels")
-            st.write(f"**Number of Points in Contour:** {len(kontur[0])}")
+            st.write(f"**Luas Kontur:** {luas:.2f} piksel")
+            st.write(f"**Keliling Kontur:** {keliling:.2f} piksel")
+            st.write(f"**Jumlah Titik dalam Kontur:** {len(kontur[0])}")
             
-            # Generate and display plot
+            # Buat dan tampilkan plot
             plot_path = save_plot_to_file(citra_asli, citra_threshold, citra_base, citra_proses_rgb, kontur, faktor_skala)
-            st.image(plot_path, caption="Contour Detection Results", use_container_width=True)
+            st.image(plot_path, caption="Hasil Deteksi Kontur", use_container_width=True)
             
-            # Clean up temporary files
+            # Bersihkan file sementara
             os.unlink(temp_file_path)
             os.unlink(plot_path)
             
         except Exception as e:
-            st.error(f"Error processing image: {e}")
+            st.error(f"Error saat memproses citra: {e}")
             if os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
 
