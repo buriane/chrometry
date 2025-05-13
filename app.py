@@ -176,7 +176,7 @@ def main():
             
             # Buat dan tampilkan plot
             plot_path = save_plot_to_file(citra_asli, citra_threshold, citra_base, citra_proses_rgb, kontur, faktor_skala)
-            st.image(plot_path, caption="Hasil Deteksi Kontur", use_container_width=True)
+            st.image(plot_path, caption="Hasil Deteksi Kontur", use_column_width=True)
             
             # Bersihkan file sementara
             os.unlink(temp_file_path)
