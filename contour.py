@@ -316,7 +316,7 @@ def main():
     try:
         # Tentukan konstanta
         FOLDER_citra = 'images'
-        NAMA_citra = 'tesla.jpg'  # Ganti dengan nama file citra yang sesuai
+        NAMA_citra = 'tesla2.png'  # Ganti dengan nama file citra yang sesuai
         FAKTOR_SKALA = 4.0
         
         # Buat path ke citra
