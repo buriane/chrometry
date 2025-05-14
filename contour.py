@@ -175,7 +175,7 @@ def main():
     try:
         # Tentukan konstanta
         FOLDER_citra = 'images'
-        NAMA_citra = 'tesla.png'
+        NAMA_citra = 'bri.png'
         FAKTOR_SKALA = 4.0
         
         # Buat path ke citra

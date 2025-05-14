@@ -226,7 +226,7 @@ def visualisasi_hasil(
     # Atur tata letak agar rapi
     plt.tight_layout()
     plt.show()
-    convex_hull = cv.convexHull(kontur[0])
+    ex_hull = cv.convexHull(kontur[0])
     titik_hull = np.concatenate((convex_hull[:, 0, :], convex_hull[:1, 0, :]), axis=0)
     plt.subplot(235)
     plt.imshow(citra_base, cmap='gray')
@@ -316,7 +316,7 @@ def main():
     try:
         # Tentukan konstanta
         FOLDER_citra = 'images'
-        NAMA_citra = 'tesla.png'  # Ganti dengan nama file citra yang sesuai
+        NAMA_citra = 'tesla.jpg'  # Ganti dengan nama file citra yang sesuai
         FAKTOR_SKALA = 4.0
         
         # Buat path ke citra
