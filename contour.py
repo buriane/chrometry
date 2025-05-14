@@ -227,7 +227,7 @@ def visualisasi_hasil(
     plt.tight_layout()
     plt.show()
     ex_hull = cv.convexHull(kontur[0])
-    titik_hull = np.concatenate((convex_hull[:, 0, :], convex_hull[:1, 0, :]), axis=0)
+    titik_hull = np.concatenate((cv.convexHull[:, 0, :], cv.convexHull[:1, 0, :]), axis=0)
     plt.subplot(235)
     plt.imshow(citra_base, cmap='gray')
     plt.plot(titik_hull[:, 0], titik_hull[:, 1], 'r-', label='Convex Hull')
