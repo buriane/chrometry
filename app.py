@@ -4,8 +4,10 @@ import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
 from contour import muat_citra, ubah_ukuran_citra, proses_kontur, deteksi_otomatis_parameter
+from color_segmentation import process_color_segmentation
 from typing import List, Tuple
 import tempfile
+import pandas as pd
 
 def save_plot_to_file(
     citra_asli: np.ndarray,
@@ -115,54 +117,66 @@ def save_plot_to_file(
     return temp_file.name
 
 def main():
-    st.title("Aplikasi Web Deteksi Kontur")
-    st.write("Unggah citra untuk mendeteksi kontur dan melihat hasil visualisasinya.")
+    st.set_page_config(page_title="Aplikasi Web Pengolahan Citra", layout="wide")
     
-    # Bagian penjelasan program
-    st.subheader("Tentang Program")
-    st.markdown("""
-    Aplikasi ini dirancang untuk mendeteksi dan menganalisis kontur pada citra menggunakan pemrosesan citra digital. Berikut adalah fitur utama program:
-
-    - **Unggah Citra**: Pengguna dapat mengunggah citra dalam format JPG, JPEG, atau PNG.
-    - **Penyesuaian Skala**: Sesuaikan faktor skala citra untuk mengubah ukuran citra menggunakan slider.
-    - **Deteksi Kontur**: Program mendeteksi kontur pada citra menggunakan algoritma OpenCV, termasuk penerapan threshold dan dilasi.
-    - **Analisis Kontur**: Menampilkan informasi seperti luas kontur, keliling kontur, dan jumlah titik kontur.
-    - **Visualisasi**: Menampilkan hasil dalam enam subplot:
-        1. Citra asli
-        2. Citra hasil threshold
-        3. Citra dengan kontur berwarna hijau
-        4. Titik kontur detail
-        5. Titik pusat dan aproksimasi poligon
-        6. Kotak pembatas dan convex hull
-    - **Unduh Contoh Citra**: Pengguna dapat mengunduh citra contoh (`tesla.png` dan `tesla.jpg`) untuk pengujian.
-
-    Program ini menggunakan **OpenCV** untuk pemrosesan citra, **Matplotlib** untuk visualisasi, dan **Streamlit** sebagai antarmuka web. Citra diolah dalam format grayscale, dan hasilnya disimpan sementara untuk ditampilkan di web.
-    """)
+    st.title("Aplikasi Pengolahan Citra Terpadu")
+    st.write("Unggah citra untuk melihat hasil deteksi kontur dan segmentasi warna secara bersamaan.")
     
-    # Tombol unduh untuk tesla.png dan tesla.jpg
+    # Penjelasan aplikasi
+    with st.expander("Tentang Aplikasi", expanded=False):
+        st.markdown("""
+        Aplikasi ini menggabungkan dua teknik pengolahan citra dalam satu antarmuka yang terintegrasi:
+        
+        **1. Deteksi Kontur:**
+        - Mengidentifikasi bentuk dan garis tepi objek dalam citra
+        - Menghitung properti seperti luas, keliling, dan fitur geometris
+        - Menampilkan visualisasi kontur, poligon aproksimasi, dan bounding box
+        
+        **2. Segmentasi Warna:**
+        - Menganalisis komposisi warna dalam citra menggunakan K-Means clustering
+        - Mengidentifikasi warna-warna dominan dan mengklasifikasikannya
+        - Menampilkan statistik warna, distribusi kategori, dan palet warna
+        
+        Cukup unggah satu citra, dan Anda akan mendapatkan analisis lengkap dari kedua teknik tersebut.
+        """)
+    
+    # Tombol unduh untuk contoh citra (semua dalam satu bagian)
     st.subheader("Unduh Contoh Citra")
+    col1, col2, col3, col4 = st.columns(4)
     images_folder = "images"
-    for image_name in ["tesla.png", "tesla.jpg"]:
+    
+    contoh_citra = [
+        ("tesla.png", col1),
+        ("tesla.jpg", col2),
+        ("colorful.png", col3),
+        ("sunset.jpg", col4)
+    ]
+    
+    for image_name, col in contoh_citra:
         image_path = os.path.join(images_folder, image_name)
         if os.path.exists(image_path):
             with open(image_path, "rb") as file:
-                st.download_button(
+                col.download_button(
                     label=f"Unduh {image_name}",
                     data=file,
                     file_name=image_name,
                     mime="image/png" if image_name.endswith(".png") else "image/jpeg"
                 )
         else:
-            st.warning(f"File {image_name} tidak ditemukan di folder {images_folder}.")
+            col.warning(f"File {image_name} tidak ditemukan.")
     
     # Pengunggah citra
     uploaded_file = st.file_uploader("Pilih citra...", type=["jpg", "jpeg", "png"], help="Unggah citra dalam format JPG, JPEG, atau PNG")
     
-    # Slider untuk faktor skala
-    faktor_skala = st.slider("Faktor Skala", min_value=1.0, max_value=10.0, value=4.0, step=0.1, help="Atur faktor skala untuk mengubah ukuran citra")
+    # Parameter untuk kedua mode
+    col1, col2 = st.columns(2)
     
-    # Parameter tambahan
-    with st.expander("Parameter Lanjutan"):
+    with col1:
+        st.subheader("Parameter Deteksi Kontur")
+        # Slider untuk faktor skala
+        faktor_skala = st.slider("Faktor Skala", min_value=1.0, max_value=10.0, value=4.0, step=0.1, help="Atur faktor skala untuk mengubah ukuran citra")
+        
+        # Parameter deteksi kontur
         otomatis = st.checkbox("Deteksi Parameter Otomatis", value=True, help="Mendeteksi parameter threshold dan kernel secara otomatis berdasarkan karakteristik citra")
         
         if not otomatis:
@@ -176,6 +190,29 @@ def main():
             ukuran_kernel = 3
             invert_threshold = False
     
+    with col2:
+        st.subheader("Parameter Segmentasi Warna")
+        # Parameter segmentasi warna
+        auto_determine = st.checkbox("Tentukan jumlah cluster otomatis", value=True, help="Menentukan jumlah optimal cluster warna secara otomatis")
+        
+        n_clusters = None if auto_determine else st.slider(
+            "Jumlah Cluster Warna", 
+            min_value=2, 
+            max_value=10, 
+            value=5, 
+            step=1, 
+            help="Tentukan jumlah cluster warna yang diinginkan"
+        )
+        
+        min_percentage = st.slider(
+            "Persentase Minimum Warna", 
+            min_value=0.1, 
+            max_value=10.0, 
+            value=1.0, 
+            step=0.1, 
+            help="Warna dengan persentase di bawah nilai ini akan diabaikan"
+        )
+    
     if uploaded_file is not None:
         try:
             # Simpan file yang diunggah ke lokasi sementara
@@ -183,83 +220,182 @@ def main():
                 temp_file.write(uploaded_file.read())
                 temp_file_path = temp_file.name
             
-            # Proses citra menggunakan fungsi dari contour.py
-            citra_asli = muat_citra(temp_file_path)
-            citra_diubah_ukuran = ubah_ukuran_citra(citra_asli, faktor_skala)
-            
-            # Gunakan parameter otomatis jika dipilih
-            if otomatis:
-                mode_adaptif, nilai_threshold, ukuran_kernel = deteksi_otomatis_parameter(citra_diubah_ukuran)
+            # Container untuk hasil analisis terpadu
+            with st.container():
+                st.header("Hasil Analisis Citra")
                 
-                # Tampilkan parameter yang terdeteksi
-                st.info(f"Parameter terdeteksi otomatis: Mode {'Adaptif' if mode_adaptif else 'Global'}, Threshold: {nilai_threshold}, Kernel: {ukuran_kernel}x{ukuran_kernel}")
-            
-            # Proses kontur dengan parameter yang ditentukan
-            citra_threshold, kontur = proses_kontur(
-                citra_diubah_ukuran,
-                mode_adaptif=mode_adaptif,
-                nilai_threshold=nilai_threshold,
-                ukuran_kernel_dilasi=ukuran_kernel,
-                invert_threshold=invert_threshold
-            )
-            
-            if not kontur:
-                # Coba beberapa kombinasi parameter untuk mendapatkan kontur
-                st.warning("Tidak ada kontur yang ditemukan dengan parameter saat ini. Mencoba beberapa parameter alternatif...")
-                
-                kombinasi_parameter = [
-                    # (mode_adaptif, nilai_threshold, ukuran_kernel_dilasi, invert_threshold)
-                    (False, 127, 3, False),  # Threshold menengah
-                    (False, 200, 3, False),  # Threshold tinggi
-                    (False, 65, 3, True),    # Inverse threshold default
-                    (True, 0, 3, False),     # Threshold adaptif
-                    (True, 0, 3, True)       # Inverse threshold adaptif
-                ]
-                
-                for mode, nilai, ukuran, invert in kombinasi_parameter:
+                # Buat dua spinner terpisah agar user tahu dua proses sedang berjalan
+                with st.spinner("Memproses citra..."):
+                    # ===== DETEKSI KONTUR =====
+                    citra_asli = muat_citra(temp_file_path)
+                    citra_diubah_ukuran = ubah_ukuran_citra(citra_asli, faktor_skala)
+                    
+                    # Gunakan parameter otomatis jika dipilih
+                    if otomatis:
+                        mode_adaptif, nilai_threshold, ukuran_kernel = deteksi_otomatis_parameter(citra_diubah_ukuran)
+                        
+                        # Tampilkan parameter yang terdeteksi
+                        st.info(f"Parameter terdeteksi otomatis: Mode {'Adaptif' if mode_adaptif else 'Global'}, Threshold: {nilai_threshold}, Kernel: {ukuran_kernel}x{ukuran_kernel}")
+                    
+                    # Proses kontur dengan parameter yang ditentukan
                     citra_threshold, kontur = proses_kontur(
                         citra_diubah_ukuran,
-                        mode_adaptif=mode,
-                        nilai_threshold=nilai,
-                        ukuran_kernel_dilasi=ukuran,
-                        invert_threshold=invert
+                        mode_adaptif=mode_adaptif,
+                        nilai_threshold=nilai_threshold,
+                        ukuran_kernel_dilasi=ukuran_kernel,
+                        invert_threshold=invert_threshold
                     )
                     
-                    if kontur:
-                        st.success(f"Kontur berhasil ditemukan dengan parameter: Mode {'Adaptif' if mode else 'Global'}, Threshold: {nilai}, Kernel: {ukuran}x{ukuran}, Inversi: {'Ya' if invert else 'Tidak'}")
-                        break
+                    if not kontur:
+                        # Coba beberapa kombinasi parameter untuk mendapatkan kontur
+                        st.warning("Tidak ada kontur yang ditemukan dengan parameter saat ini. Mencoba beberapa parameter alternatif...")
+                        
+                        kombinasi_parameter = [
+                            # (mode_adaptif, nilai_threshold, ukuran_kernel_dilasi, invert_threshold)
+                            (False, 127, 3, False),  # Threshold menengah
+                            (False, 200, 3, False),  # Threshold tinggi
+                            (False, 65, 3, True),    # Inverse threshold default
+                            (True, 0, 3, False),     # Threshold adaptif
+                            (True, 0, 3, True)       # Inverse threshold adaptif
+                        ]
+                        
+                        for mode, nilai, ukuran, invert in kombinasi_parameter:
+                            citra_threshold, kontur = proses_kontur(
+                                citra_diubah_ukuran,
+                                mode_adaptif=mode,
+                                nilai_threshold=nilai,
+                                ukuran_kernel_dilasi=ukuran,
+                                invert_threshold=invert
+                            )
+                            
+                            if kontur:
+                                st.success(f"Kontur berhasil ditemukan dengan parameter: Mode {'Adaptif' if mode else 'Global'}, Threshold: {nilai}, Kernel: {ukuran}x{ukuran}, Inversi: {'Ya' if invert else 'Tidak'}")
+                                break
+                    
+                    # ===== SEGMENTASI WARNA =====
+                    # Proses citra untuk segmentasi warna
+                    results, temp_files = process_color_segmentation(
+                        temp_file_path,
+                        n_clusters=n_clusters,
+                        auto_determine=auto_determine,
+                        max_clusters=8,
+                        min_percentage=min_percentage
+                    )
+                    
+                    # Dapatkan info warna dari hasil
+                    color_info = results['color_info']
+                    color_features = results['color_features']
+                
+                # Tampilkan hasil analisis setelah pemrosesan selesai
+                
+                # Bagian 1: Citra Original dan Hasil Deteksi Kontur
+                st.subheader("1. Hasil Deteksi Kontur")
+                    
+                if kontur:
+                    # Siapkan citra untuk visualisasi
+                    citra_base = citra_diubah_ukuran.copy()
+                    citra_proses_rgb = cv.cvtColor(citra_diubah_ukuran, cv.COLOR_GRAY2RGB)
+                    cv.drawContours(citra_proses_rgb, kontur, -1, (0, 255, 0), 3)
+                    
+                    # Tampilkan statistik dasar dalam bentuk metrik
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    luas = cv.contourArea(kontur[0])
+                    keliling = cv.arcLength(kontur[0], True)
+                    jumlah_titik = len(kontur[0])
+                    
+                    # Hitung bentuk
+                    x, y, lebar, tinggi = cv.boundingRect(kontur[0])
+                    rasio_aspek = float(lebar) / tinggi if tinggi > 0 else 0
+                    
+                    col1.metric("Luas Kontur", f"{luas:.2f} piksel")
+                    col2.metric("Keliling Kontur", f"{keliling:.2f} piksel")
+                    col3.metric("Jumlah Titik", f"{jumlah_titik}")
+                    col4.metric("Rasio Aspek", f"{rasio_aspek:.2f}")
+                    
+                    # Buat dan tampilkan plot
+                    plot_path = save_plot_to_file(citra_asli, citra_threshold, citra_base, citra_proses_rgb, kontur, faktor_skala)
+                    st.image(plot_path, caption="Visualisasi Deteksi Kontur", use_column_width=True)
+                    
+                    # Bersihkan file sementara plot
+                    os.unlink(plot_path)
+                else:
+                    st.error("Tidak ada kontur yang ditemukan pada citra dengan semua parameter yang dicoba.")
+                
+                # Bagian 2: Hasil Segmentasi Warna
+                st.subheader("2. Hasil Segmentasi Warna")
+                
+                # Tampilkan visualisasi segmentasi warna
+                st.image(temp_files[0], caption="Visualisasi Segmentasi Warna", use_column_width=True)
+                
+                # Tampilkan info warna dalam bentuk tabel
+                st.write("**Warna-Warna Dominan:**")
+                st.dataframe(
+                    color_info[['Kategori', 'Nama Warna', 'Persentase (%)', 'RGB', 'Hex']],
+                    use_container_width=True
+                )
+                
+                # Tampilkan palet warna dan distribusi kategori
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**Palet Warna Dominan:**")
+                    st.image(temp_files[1], use_column_width=True)
+                
+                with col2:
+                    st.write("**Distribusi Kategori Warna:**")
+                    st.image(temp_files[2], use_column_width=True)
+                
+                # Tampilkan statistik fitur warna
+                st.write("**Statistik Fitur Warna:**")
+                
+                # Bagi statistik fitur ke dalam kategori
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("Statistik Dasar")
+                    basic_features = {
+                        'Kecerahan Rata-rata': color_features['brightness'],
+                        'Kontras': color_features['contrast'],
+                        'Colorfulness': color_features['colorfulness'],
+                        'Keberagaman Warna': color_features['color_diversity'] * 100,
+                        'Keseimbangan Warna': color_features['color_balance']
+                    }
+                    
+                    basic_df = pd.DataFrame({
+                        'Metrik': list(basic_features.keys()),
+                        'Nilai': list(basic_features.values())
+                    })
+                    
+                    basic_df['Nilai'] = basic_df['Nilai'].round(2)
+                    st.table(basic_df)
+                
+                with col2:
+                    st.write("Statistik RGB")
+                    rgb_features = {
+                        'Rata-rata Merah': color_features['mean_red'],
+                        'Rata-rata Hijau': color_features['mean_green'],
+                        'Rata-rata Biru': color_features['mean_blue'],
+                        'Std. Dev Merah': color_features['std_red'],
+                        'Std. Dev Hijau': color_features['std_green'],
+                        'Std. Dev Biru': color_features['std_blue']
+                    }
+                    
+                    rgb_df = pd.DataFrame({
+                        'Metrik': list(rgb_features.keys()),
+                        'Nilai': list(rgb_features.values())
+                    })
+                    
+                    rgb_df['Nilai'] = rgb_df['Nilai'].round(2)
+                    st.table(rgb_df)
+                
+                # Bersihkan file sementara
+                for file_path in temp_files:
+                    os.unlink(file_path)
             
-            if not kontur:
-                st.error("Tidak ada kontur yang ditemukan pada citra dengan semua parameter yang dicoba.")
-                os.unlink(temp_file_path)
-                return
-            
-            # Siapkan citra untuk visualisasi
-            citra_base = citra_diubah_ukuran.copy()
-            citra_proses_rgb = cv.cvtColor(citra_diubah_ukuran, cv.COLOR_GRAY2RGB)
-            cv.drawContours(citra_proses_rgb, kontur, -1, (0, 255, 0), 3)
-            
-            # Tampilkan analisis kontur
-            st.subheader("Analisis Kontur")
-            luas = cv.contourArea(kontur[0])
-            keliling = cv.arcLength(kontur[0], True)
-            st.write(f"**Luas Kontur:** {luas:.2f} piksel")
-            st.write(f"**Keliling Kontur:** {keliling:.2f} piksel")
-            st.write(f"**Jumlah Titik dalam Kontur:** {len(kontur[0])}")
-            
-            # Hitung bentuk
-            x, y, lebar, tinggi = cv.boundingRect(kontur[0])
-            rasio_aspek = float(lebar) / tinggi if tinggi > 0 else 0
-            st.write(f"**Rasio Aspek (lebar/tinggi):** {rasio_aspek:.2f}")
-            
-            # Buat dan tampilkan plot
-            plot_path = save_plot_to_file(citra_asli, citra_threshold, citra_base, citra_proses_rgb, kontur, faktor_skala)
-            st.image(plot_path, caption="Hasil Deteksi Kontur", use_container_width=True)
-            
-            # Bersihkan file sementara
+            # Bersihkan file gambar yang diunggah
             os.unlink(temp_file_path)
-            os.unlink(plot_path)
-            
+        
         except Exception as e:
             st.error(f"Error saat memproses citra: {e}")
             import traceback
