@@ -2,7 +2,8 @@ import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-from typing import List, Tuple
+import traceback
+from typing import List, Tuple, Dict
 
 def muat_citra(lokasi_citra: str) -> np.ndarray:
     """
@@ -101,6 +102,117 @@ def proses_kontur(citra: np.ndarray,
     
     return citra_threshold, kontur_terfilter[:1] if kontur_terfilter else []
 
+def deteksi_bentuk_geometri(kontur: np.ndarray) -> Tuple[str, float, str]:
+    """
+    Mendeteksi bentuk geometri berdasarkan jumlah sudut dan properti kontur.
+    Mengembalikan bentuk 2D, tingkat kepercayaan, dan bentuk ruang (jika ada).
+    
+    Args:
+        kontur (np.ndarray): Kontur dari objek.
+    
+    Returns:
+        Tuple[str, float, str]: (nama_bentuk_2D, tingkat_kepercayaan, nama_bentuk_ruang)
+    """
+    epsilon = 0.04 * cv.arcLength(kontur, True)
+    approx = cv.approxPolyDP(kontur, epsilon, True)
+    vertices = len(approx)
+    
+    area = cv.contourArea(kontur)
+    perimeter = cv.arcLength(kontur, True)
+    circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter != 0 else 0
+    
+    x, y, w, h = cv.boundingRect(approx)
+    aspect_ratio = float(w) / h if h != 0 else 1.0
+    shape_2d = "Tidak Dikenal"
+    confidence = 0.6
+    shape_3d = "Tidak Diketahui"
+
+    if circularity > 0.90:
+        shape_2d = "Lingkaran"
+        confidence = circularity
+        shape_3d = "Silinder"
+    elif vertices == 3:
+        shape_2d = "Segitiga"
+        confidence = 0.8
+        shape_3d = "Prisma Segitiga"
+    elif vertices == 4:
+        if 0.95 <= aspect_ratio <= 1.05:
+            shape_2d = "Persegi"
+            confidence = 0.9
+            shape_3d = "Kubus"
+        else:
+            shape_2d = "Persegi Panjang"
+            confidence = 0.85
+            shape_3d = "Balok"
+    elif vertices == 5:
+        shape_2d = "Pentagon"
+        confidence = 0.8
+        shape_3d = "Prisma Pentagon"
+    elif vertices == 6:
+        shape_2d = "Heksagon"
+        confidence = 0.8
+        shape_3d = "Prisma Heksagon"
+    else:
+        shape_2d = "Poligon"
+        confidence = 0.6
+        shape_3d = "Prisma Tidak Beraturan"
+
+    return shape_2d, confidence, shape_3d
+
+def analisis_properti_geometri(kontur: np.ndarray) -> Dict:
+    """
+    Menganalisis properti geometri secara detail.
+    Returns:
+        Dict: Dictionary berisi properti-properti geometri
+    """
+    try:
+        # Properti dasar
+        area = cv.contourArea(kontur)
+        perimeter = cv.arcLength(kontur, True)
+        
+        # Momen
+        M = cv.moments(kontur)
+        cx = int(M['m10']/M['m00']) if M['m00'] != 0 else 0
+        cy = int(M['m01']/M['m00']) if M['m00'] != 0 else 0
+        
+        # Properti tambahan
+        hull = cv.convexHull(kontur)
+        hull_area = cv.contourArea(hull)
+        
+        # Hitung properti dengan safety checks
+        x, y, w, h = cv.boundingRect(kontur)
+        aspect_ratio = float(w)/h if h != 0 else 1.0
+        solidity = float(area)/hull_area if hull_area > 0 else 0
+        extent = float(area)/(w*h) if w*h != 0 else 0
+        circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter != 0 else 0
+        
+        return {
+            'area': area,
+            'perimeter': perimeter,
+            'center_x': cx,
+            'center_y': cy,
+            'solidity': solidity,
+            'circularity': circularity,
+            'extent': extent,
+            'aspect_ratio': aspect_ratio,
+            'width': w,
+            'height': h
+        }
+    except Exception as e:
+        print(f"Error in analisis_properti_geometri: {str(e)}")
+        return {
+            'area': 0,
+            'perimeter': 0,
+            'center_x': 0,
+            'center_y': 0,
+            'solidity': 0,
+            'circularity': 0,
+            'extent': 0,
+            'aspect_ratio': 1.0,
+            'width': 0,
+            'height': 0
+        }
+
 def visualisasi_hasil(
     citra_asli: np.ndarray,
     citra_threshold: np.ndarray,
@@ -110,21 +222,13 @@ def visualisasi_hasil(
     faktor_skala: float
 ) -> None:
     """
-    Menampilkan hasil pemrosesan citra dalam layout 2x3 subplot.
-    
-    Args:
-        citra_asli (np.ndarray): Citra asli dalam format grayscale.
-        citra_threshold (np.ndarray): citra hasil threshold.
-        citra_base (np.ndarray): citra grayscale dasar tanpa kontur berwarna.
-        citra_proses_rgb (np.ndarray): citra RGB dengan kontur berwarna.
-        kontur (List[np.ndarray]): Daftar kontur yang ditemukan.
-        faktor_skala (float): Faktor skala yang digunakan untuk mengubah ukuran.
+    Visualisasi hasil dengan tambahan analisis geometri.
     """
-    citra_asli_diubah = ubah_ukuran_citra(citra_asli, faktor_skala)
     plt.figure(figsize=(15, 10))
     
+    # Plot dasar
     plt.subplot(231)
-    plt.imshow(citra_asli_diubah, cmap='gray')
+    plt.imshow(ubah_ukuran_citra(citra_asli, faktor_skala), cmap='gray')
     plt.title('Citra Asli')
     plt.axis('off')
     
@@ -135,57 +239,59 @@ def visualisasi_hasil(
     
     plt.subplot(233)
     plt.imshow(citra_proses_rgb)
-    plt.title('Kontur (Garis Hijau)')
+    plt.title('Kontur Terdeteksi')
     plt.axis('off')
     
-    if not kontur:
-        plt.tight_layout()
-        plt.show()
-        return
-    
-    citra_kontur_detail = citra_base.copy()
-    citra_kontur_detail_rgb = cv.cvtColor(citra_kontur_detail, cv.COLOR_GRAY2RGB)
-    for point in kontur[0]:
-        x, y = point[0]
-        cv.circle(citra_kontur_detail_rgb, (x, y), 2, (0, 0, 255), -1)
-    
-    plt.subplot(234)
-    plt.imshow(citra_kontur_detail_rgb)
-    plt.title(f'Titik Kontur (total: {len(kontur[0])})')
-    plt.axis('off')
-    
-    momen = cv.moments(kontur[0])
-    if momen['m00'] != 0:
-        pusat_x = int(momen['m10'] / momen['m00'])
-        pusat_y = int(momen['m01'] / momen['m00'])
-        citra_poligon = cv.cvtColor(citra_base.copy(), cv.COLOR_GRAY2RGB)
-        keliling = cv.arcLength(kontur[0], True)
-        epsilon = 0.005 * keliling
-        poligon_aproksimasi = cv.approxPolyDP(kontur[0], epsilon, True)
-        cv.polylines(citra_poligon, [poligon_aproksimasi], True, (0, 0, 255), 2)
-        cv.circle(citra_poligon, (pusat_x, pusat_y), 5, (255, 0, 0), -1)
+    if kontur:
+        # Analisis bentuk
+        shape, confidence = deteksi_bentuk_geometri(kontur[0])
+        properties = analisis_properti_geometri(kontur[0])
+        
+        # Plot properti geometri
+        plt.subplot(234)
+        categories = ['Circularity', 'Solidity', 'Extent']
+        values = [properties['circularity'], properties['solidity'], properties['extent']]
+        
+        angles = np.linspace(0, 2*np.pi, len(categories), endpoint=False)
+        values = np.concatenate((values, [values[0]]))
+        angles = np.concatenate((angles, [angles[0]]))
+        
+        ax = plt.gca()
+        ax.plot(angles, values)
+        ax.fill(angles, values, alpha=0.25)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(categories)
+        plt.title(f'Properti Bentuk: {shape}\nKepercayaan: {confidence:.2f}')
+        
+        # Plot histogram titik kontur
         plt.subplot(235)
-        plt.imshow(citra_poligon)
-        plt.title(f'Poligon Aproksimasi ({len(poligon_aproksimasi)} titik)')
-        plt.axis('off')
-    
-    ex_hull = cv.convexHull(kontur[0])
-    titik_hull = np.concatenate((ex_hull[:, 0, :], ex_hull[:1, 0, :]), axis=0)
-    plt.subplot(235)
-    plt.imshow(citra_base, cmap='gray')
-    plt.plot(titik_hull[:, 0], titik_hull[:, 1], 'r-', label='Convex Hull')
-    plt.title('Convex Hull')
-    plt.legend()
-    plt.axis('off')
-    
-    x, y, lebar, tinggi = cv.boundingRect(kontur[0])
-    citra_dengan_kotak = citra_base.copy()
-    cv.rectangle(citra_dengan_kotak, (x, y), (x + lebar, y + tinggi), (255), 2)
-    plt.subplot(236)
-    plt.imshow(citra_dengan_kotak, cmap='gray')
-    plt.title('Kotak Pembatas')
-    plt.axis('off')
-    
+        points = kontur[0].reshape(-1, 2)
+        plt.hist2d(points[:, 0], points[:, 1], bins=30)
+        plt.title('Distribusi Titik Kontur')
+        plt.colorbar()
+        
+        # Plot properti ukuran
+        plt.subplot(236)
+        metrics = ['Area', 'Perimeter', 'Aspect Ratio']
+        sizes = [
+            properties['area']/1000,  # Skala ke ribu pixel
+            properties['perimeter']/100,  # Skala ke ratus pixel
+            properties['aspect_ratio']
+        ]
+        plt.bar(metrics, sizes)
+        plt.title('Metrik Ukuran')
+        plt.yscale('log')
+        
+        # Print informasi tambahan
+        print(f"\nAnalisis Geometri:")
+        print(f"================")
+        print(f"Bentuk Terdeteksi: {shape}")
+        print(f"Tingkat Kepercayaan: {confidence:.2f}")
+        print(f"Luas: {properties['area']:.2f} piksel²")
+        print(f"Keliling: {properties['perimeter']:.2f} piksel")
+        print(f"Rasio Aspek: {properties['aspect_ratio']:.2f}")
+        print(f"Pusat Massa: ({properties['center_x']}, {properties['center_y']})")
+        
     plt.tight_layout()
     plt.show()
 
@@ -313,7 +419,6 @@ def main():
         print(f"Error: {e}")
     except Exception as e:
         print(f"Error tak terduga: {e}")
-        import traceback
         traceback.print_exc()
 
 if __name__ == "__main__":

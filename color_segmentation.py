@@ -456,114 +456,93 @@ def save_color_segmentation_plot(
 ) -> str:
     """
     Generate and save color segmentation visualization to a temporary file.
-    
-    Args:
-        original_img (np.ndarray): Original image.
-        segmented_img (np.ndarray): Segmented image from clustering.
-        color_info (pd.DataFrame): Color dominance information.
-        cluster_images (List[np.ndarray]): List of images for each cluster.
-        max_clusters_to_show (int): Maximum number of clusters to display individually.
-        
-    Returns:
-        str: Path to the saved visualization file.
     """
-    # Create visualization
-    fig = plt.figure(figsize=(15, 10))
+    # Create figure with subplots
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    axes = axes.ravel()
     
     # Display original image
-    plt.subplot(231)
-    plt.imshow(cv.cvtColor(original_img, cv.COLOR_BGR2RGB) if len(original_img.shape) == 3 and original_img.shape[2] == 3 else original_img)
-    plt.title('Citra Asli')
-    plt.axis('off')
+    if len(original_img.shape) == 3 and original_img.shape[2] == 3:
+        axes[0].imshow(cv.cvtColor(original_img, cv.COLOR_BGR2RGB))
+    else:
+        axes[0].imshow(original_img, cmap='gray')
+    axes[0].set_title('Citra Asli')
+    axes[0].axis('off')
     
     # Display segmented image
-    plt.subplot(232)
-    plt.imshow(segmented_img)
-    plt.title('Citra Tersegmentasi')
-    plt.axis('off')
+    axes[1].imshow(segmented_img)
+    axes[1].set_title('Citra Tersegmentasi')
+    axes[1].axis('off')
     
     # Display color distribution pie chart
-    plt.subplot(233)
-    
-    # Ensure colors are valid for matplotlib
     safe_colors = []
+    percentages = []
+    labels = []
+    
     for _, row in color_info.iterrows():
         try:
-            # Convert hex to RGB and ensure it's in 0-1 range
             rgb = to_rgb(row['Hex'])
             safe_colors.append(rgb)
+            percentages.append(row['Persentase (%)'])
+            if len(color_info) > 5:
+                labels.append(f"Cluster {len(labels)+1}\n({row['Persentase (%)']}%)")
+            else:
+                labels.append(f"{row['Nama Warna']}\n({row['Persentase (%)']}%)")
         except ValueError:
-            # Fallback to a default color if conversion fails
-            safe_colors.append((0.5, 0.5, 0.5))  # Medium gray
+            continue
     
-    # Create simplified labels
-    if len(color_info) > 5:
-        labels = [f"Cluster {i+1} ({row['Persentase (%)']}%)" for i, (_, row) in enumerate(color_info.iterrows())]
-    else:
-        labels = [f"{row['Nama Warna']} ({row['Persentase (%)']}%)" for _, row in color_info.iterrows()]
+    if safe_colors:
+        axes[2].pie(
+            percentages, 
+            labels=labels, 
+            colors=safe_colors,
+            autopct='%1.1f%%',
+            startangle=90
+        )
+    axes[2].set_title('Distribusi Warna')
     
-    plt.pie(
-        color_info['Persentase (%)'], 
-        labels=labels, 
-        colors=safe_colors,
-        autopct='%1.1f%%',
-        startangle=90
-    )
-    plt.title('Distribusi Warna')
-    
-    # Display individual clusters (maximum 3 top clusters)
+    # Display individual clusters
     max_display = min(max_clusters_to_show, len(cluster_images))
     for i in range(max_display):
-        plt.subplot(234 + i)
-        
-        # Create a colored mask for this cluster
         if i < len(color_info):
             color_name = color_info.iloc[i]['Nama Warna']
             percentage = color_info.iloc[i]['Persentase (%)']
             category = color_info.iloc[i]['Kategori']
             
-            # Create RGB overlay using the cluster color
+            # Create RGB overlay
             h, w = cluster_images[i].shape
             mask_rgb = np.zeros((h, w, 3), dtype=np.uint8)
             
-            # Get RGB from the hex color
             try:
                 hex_color = color_info.iloc[i]['Hex']
                 r, g, b = [int(255 * c) for c in to_rgb(hex_color)]
-            except ValueError:
-                # Fallback if conversion fails
-                r, g, b = 128, 128, 128  # Default to gray
-            
-            # Apply color to mask
-            mask_rgb[cluster_images[i] > 0] = [r, g, b]
-            
-            # Blend with original for better visualization
-            if len(original_img.shape) == 3 and original_img.shape[2] == 3:
-                original_rgb = cv.cvtColor(original_img, cv.COLOR_BGR2RGB)
-            else:
-                original_rgb = cv.cvtColor(original_img, cv.COLOR_GRAY2RGB)
+                mask_rgb[cluster_images[i] > 0] = [r, g, b]
                 
-            blend = cv.addWeighted(
-                original_rgb, 
-                0.7, 
-                mask_rgb, 
-                0.3, 
-                0
-            )
+                # Create blend
+                if len(original_img.shape) == 3 and original_img.shape[2] == 3:
+                    original_rgb = cv.cvtColor(original_img, cv.COLOR_BGR2RGB)
+                else:
+                    original_rgb = cv.cvtColor(original_img, cv.COLOR_GRAY2RGB)
+                
+                blend = cv.addWeighted(original_rgb, 0.7, mask_rgb, 0.3, 0)
+                
+                axes[i+3].imshow(blend)
+                axes[i+3].set_title(f'{category}: {color_name}\n({percentage:.1f}%)')
+            except ValueError:
+                axes[i+3].imshow(cluster_images[i], cmap='gray')
+                axes[i+3].set_title(f'Cluster {i+1}')
             
-            plt.imshow(blend)
-            plt.title(f'{category}: {color_name} ({percentage:.1f}%)')
-        else:
-            plt.imshow(cluster_images[i], cmap='gray')
-            plt.title(f'Cluster {i+1}')
-        
-        plt.axis('off')
+            axes[i+3].axis('off')
+    
+    # Turn off any unused subplots
+    for i in range(max_display + 3, 6):
+        axes[i].axis('off')
     
     plt.tight_layout()
     
     # Save to temporary file
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-    plt.savefig(temp_file.name, bbox_inches='tight')
+    plt.savefig(temp_file.name, bbox_inches='tight', dpi=300)
     plt.close(fig)
     
     return temp_file.name

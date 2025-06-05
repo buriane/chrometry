@@ -3,11 +3,71 @@ import os
 import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
-from contour import muat_citra, ubah_ukuran_citra, proses_kontur, deteksi_otomatis_parameter
+import plotly.graph_objects as go
+from contour import (
+    muat_citra, 
+    ubah_ukuran_citra, 
+    proses_kontur, 
+    deteksi_otomatis_parameter,
+    deteksi_bentuk_geometri,
+    analisis_properti_geometri
+)
 from color_segmentation import process_color_segmentation
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import tempfile
 import pandas as pd
+
+def analisis_properti_geometri(kontur: np.ndarray) -> Dict:
+    """
+    Menganalisis properti geometri secara detail.
+    """
+    try:
+        # Properti dasar
+        area = cv.contourArea(kontur)
+        perimeter = cv.arcLength(kontur, True)
+        
+        # Momen
+        M = cv.moments(kontur)
+        cx = int(M['m10']/M['m00']) if M['m00'] != 0 else 0
+        cy = int(M['m01']/M['m00']) if M['m00'] != 0 else 0
+        
+        # Properti tambahan
+        hull = cv.convexHull(kontur)
+        hull_area = cv.contourArea(hull)
+        
+        # Hitung properti dengan safety checks
+        x, y, w, h = cv.boundingRect(kontur)
+        aspect_ratio = float(w)/h if h != 0 else 1.0
+        solidity = float(area)/hull_area if hull_area > 0 else 0
+        extent = float(area)/(w*h) if w*h != 0 else 0
+        circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter != 0 else 0
+        
+        return {
+            'area': area,
+            'perimeter': perimeter,
+            'center_x': cx,
+            'center_y': cy,
+            'solidity': solidity,
+            'circularity': circularity,
+            'extent': extent,
+            'aspect_ratio': aspect_ratio,
+            'width': w,
+            'height': h
+        }
+    except Exception as e:
+        print(f"Error in analisis_properti_geometri: {str(e)}")
+        return {
+            'area': 0,
+            'perimeter': 0,
+            'center_x': 0,
+            'center_y': 0,
+            'solidity': 0,
+            'circularity': 0,
+            'extent': 0,
+            'aspect_ratio': 1.0,
+            'width': 0,
+            'height': 0
+        }
 
 def save_plot_to_file(
     citra_asli: np.ndarray,
@@ -257,36 +317,87 @@ def main():
                     color_info = results['color_info']
                     color_features = results['color_features']
                 
-                # Bagian 1: Hasil Deteksi Kontur
-                st.subheader("1. Hasil Deteksi Kontur")
+                # Rename and reorganize the section
+                st.subheader("1. Analisis Bentuk dan Kontur")
                 
                 if kontur:
-                    citra_base = citra_diubah_ukuran.copy()
-                    citra_proses_rgb = cv.cvtColor(citra_diubah_ukuran, cv.COLOR_GRAY2RGB)
-                    cv.drawContours(citra_proses_rgb, kontur, -1, (0, 255, 0), 3)
-                    
+                    # Create two columns for metrics
                     col1, col2, col3, col4 = st.columns(4)
-                    luas = cv.contourArea(kontur[0])
-                    keliling = cv.arcLength(kontur[0], True)
-                    jumlah_titik = len(kontur[0])
-                    x, y, lebar, tinggi = cv.boundingRect(kontur[0])
-                    rasio_aspek = float(lebar) / tinggi if tinggi > 0 else 0
                     
-                    col1.metric("Luas Kontur", f"{luas:.2f} piksel")
-                    col2.metric("Keliling Kontur", f"{keliling:.2f} piksel")
-                    col3.metric("Jumlah Titik", f"{jumlah_titik}")
-                    col4.metric("Rasio Aspek", f"{rasio_aspek:.2f}")
+                    # Use the imported deteksi_bentuk_geometri (returns 3 values)
+                    shape_2d, confidence, shape_3d = deteksi_bentuk_geometri(kontur[0])
+                    properties = analisis_properti_geometri(kontur[0])
+
+                    # Display metrics
+                    col1.metric("Bentuk 2D Terdeteksi", shape_2d)
+                    col2.metric("Bentuk Ruang", shape_3d)
+                    col3.metric("Tingkat Kepercayaan", f"{confidence:.2%}")
+                    col4.metric("Luas", f"{properties['area']:.0f} px²")
                     
-                    plot_path = save_plot_to_file(citra_asli, citra_threshold, citra_base, citra_proses_rgb, kontur, faktor_skala)
-                    st.image(plot_path, caption="Visualisasi Deteksi Kontur", use_column_width=True)
-                    os.unlink(plot_path)
+                    # Additional geometric properties
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        # Visualization of contour detection
+                        citra_base = citra_diubah_ukuran.copy()
+                        citra_proses_rgb = cv.cvtColor(citra_diubah_ukuran, cv.COLOR_GRAY2RGB)
+                        cv.drawContours(citra_proses_rgb, kontur, -1, (0, 255, 0), 3)
+                        
+                        plot_path = save_plot_to_file(citra_asli, citra_threshold, citra_base, citra_proses_rgb, kontur, faktor_skala)
+                        st.image(plot_path, caption="Visualisasi Deteksi Kontur", use_container_width=True)
+                        os.unlink(plot_path)
+                    
+                    with col2:
+                        # Radar chart for shape properties
+                        categories = ['Circularity', 'Solidity', 'Extent']
+                        values = [properties['circularity'], properties['solidity'], properties['extent']]
+                        
+                        fig = go.Figure(data=go.Scatterpolar(
+                            r=values + [values[0]],
+                            theta=categories + [categories[0]],
+                            fill='toself'
+                        ))
+                        
+                        fig.update_layout(
+                            polar=dict(
+                                radialaxis=dict(
+                                    visible=True,
+                                    range=[0, 1]
+                                )),
+                            showlegend=False,
+                            title="Properti Bentuk"
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Additional geometric information in an expander
+                    with st.expander("Detail Properti Geometri"):
+                        detail_col1, detail_col2 = st.columns(2)
+                        
+                        with detail_col1:
+                            st.write("**Properti Dasar:**")
+                            st.write(f"- Jumlah Titik Kontur: {len(kontur[0])}")
+                            st.write(f"- Luas: {properties['area']:.2f} px²")
+                            st.write(f"- Keliling: {properties['perimeter']:.2f} px")
+                            st.write(f"- Rasio Lebar/Tinggi: {properties['aspect_ratio']:.2f}")
+                            st.write(f"- Dimensi: {properties['width']}x{properties['height']} px")
+                            st.write(f"- Pusat Massa: ({properties['center_x']}, {properties['center_y']})")
+                        
+                        with detail_col2:
+                            st.write("**Properti Lanjutan:**")
+                            st.write(f"- Circularity: {properties['circularity']:.3f}")
+                            st.write(f"- Solidity: {properties['solidity']:.3f}")
+                            st.write(f"- Extent: {properties['extent']:.3f}")
                 else:
                     st.error("Tidak ada kontur yang ditemukan pada citra dengan semua parameter yang dicoba.")
-                
+
+                # Remove the geometric analysis section from the bottom
+                # (delete the previous geometric analysis section)
+
                 # Bagian 2: Hasil Segmentasi Warna
                 st.subheader("2. Hasil Segmentasi Warna")
                 
-                st.image(temp_files[0], caption="Visualisasi Segmentasi Warna", use_column_width=True)
+                st.image(temp_files[0], caption="Visualisasi Segmentasi Warna", use_container_width=True)
                 
                 st.write("**Warna-Warna Dominan:**")
                 st.dataframe(
@@ -298,11 +409,11 @@ def main():
                 
                 with col1:
                     st.write("**Palet Warna Dominan:**")
-                    st.image(temp_files[1], use_column_width=True)
+                    st.image(temp_files[1], use_container_width=True)
                 
                 with col2:
                     st.write("**Distribusi Kategori Warna:**")
-                    st.image(temp_files[2], use_column_width=True)
+                    st.image(temp_files[2], use_container_width=True)
                 
                 st.write("**Statistik Fitur Warna:**")
                 col1, col2 = st.columns(2)
@@ -343,9 +454,9 @@ def main():
                     
                     rgb_df['Nilai'] = rgb_df['Nilai'].round(2)
                     st.table(rgb_df)
-                
-                for file_path in temp_files:
-                    os.unlink(file_path)
+            
+            for file_path in temp_files:
+                os.unlink(file_path)
             
             os.unlink(temp_file_path)
         
