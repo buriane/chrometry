@@ -87,70 +87,76 @@ def save_plot_to_file(
     """
     Menyimpan plot visualisasi ke file sementara dan mengembalikan jalurnya.
     """
-    plt.figure(figsize=(15, 10))
-    
-    # Subplot 1: Citra Asli
-    citra_asli_diubah = ubah_ukuran_citra(citra_asli, faktor_skala)
-    plt.subplot(231)
-    plt.imshow(citra_asli_diubah, cmap='gray')
-    plt.title('Citra Asli')
-    plt.axis('off')
-    
-    # Subplot 2: Threshold
-    plt.subplot(232)
-    plt.imshow(citra_threshold, cmap='gray')
-    plt.title('Threshold')
-    plt.axis('off')
-    
-    # Subplot 3: Kontur (Garis Hijau)
-    plt.subplot(233)
-    plt.imshow(citra_proses_rgb)
-    plt.title('Kontur (Garis Hijau)')
-    plt.axis('off')
-    
-    if kontur:
-        # Subplot 4: Titik Kontur
-        citra_kontur_detail = citra_base.copy()
-        citra_kontur_detail_rgb = cv.cvtColor(citra_kontur_detail, cv.COLOR_GRAY2RGB)
-        for point in kontur[0]:
-            x, y = point[0]
-            cv.circle(citra_kontur_detail_rgb, (x, y), 2, (0, 0, 255), -1)  # Titik merah
-        plt.subplot(234)
-        plt.imshow(citra_kontur_detail_rgb)
-        plt.title(f'Titik Kontur (total: {len(kontur[0])})')
+    try:
+        plt.figure(figsize=(15, 10))
+        
+        # Subplot 1: Citra Asli
+        citra_asli_diubah = ubah_ukuran_citra(citra_asli, faktor_skala)
+        plt.subplot(231)
+        plt.imshow(citra_asli_diubah, cmap='gray')
+        plt.title('Citra Asli')
         plt.axis('off')
         
-        # Subplot 5: Convex Hull
-        momen = cv.moments(kontur[0])
-        if momen['m00'] != 0:
-            pusat_x = int(momen['m10'] / momen['m00'])
-            pusat_y = int(momen['m01'] / momen['m00'])
-            citra_convex_hull = cv.cvtColor(citra_base.copy(), cv.COLOR_GRAY2RGB)
+        # Subplot 2: Threshold
+        plt.subplot(232)
+        plt.imshow(citra_threshold, cmap='gray')
+        plt.title('Threshold')
+        plt.axis('off')
+        
+        # Subplot 3: Kontur (Garis Hijau)
+        plt.subplot(233)
+        plt.imshow(citra_proses_rgb)
+        plt.title('Kontur (Garis Hijau)')
+        plt.axis('off')
+        
+        if kontur:
+            # Subplot 4: Titik Kontur
+            citra_kontur_detail = citra_base.copy()
+            citra_kontur_detail_rgb = cv.cvtColor(citra_kontur_detail, cv.COLOR_GRAY2RGB)
+            for point in kontur[0]:
+                x, y = point[0]
+                cv.circle(citra_kontur_detail_rgb, (x, y), 2, (0, 0, 255), -1)  # Titik merah
+            plt.subplot(234)
+            plt.imshow(citra_kontur_detail_rgb)
+            plt.title(f'Titik Kontur (total: {len(kontur[0])})')
+            plt.axis('off')
             
-            # Buat convex hull dengan warna merah dan garis tebal
-            hull = cv.convexHull(kontur[0])
-            cv.polylines(citra_convex_hull, [hull], True, (255, 0, 0), 4)  # Warna merah dengan ketebalan 4
-            cv.circle(citra_convex_hull, (pusat_x, pusat_y), 5, (0, 255, 0), -1)  # Titik pusat hijau
+            # Subplot 5: Convex Hull
+            momen = cv.moments(kontur[0])
+            if momen['m00'] != 0:
+                pusat_x = int(momen['m10'] / momen['m00'])
+                pusat_y = int(momen['m01'] / momen['m00'])
+                citra_convex_hull = cv.cvtColor(citra_base.copy(), cv.COLOR_GRAY2RGB)
+                
+                # Buat convex hull dengan warna merah dan garis tebal
+                hull = cv.convexHull(kontur[0])
+                cv.polylines(citra_convex_hull, [hull], True, (255, 0, 0), 4)  # Warna merah dengan ketebalan 4
+                cv.circle(citra_convex_hull, (pusat_x, pusat_y), 5, (0, 255, 0), -1)  # Titik pusat hijau
+                
+                plt.subplot(235)
+                plt.imshow(citra_convex_hull)
+                plt.title(f'Convex Hull ({len(hull)} titik)')
+                plt.axis('off')
             
-            plt.subplot(235)
-            plt.imshow(citra_convex_hull)
-            plt.title(f'Convex Hull ({len(hull)} titik)')
+            # Subplot 6: Kotak Pembatas
+            x, y, lebar, tinggi = cv.boundingRect(kontur[0])
+            citra_dengan_kotak = citra_base.copy()
+            cv.rectangle(citra_dengan_kotak, (x, y), (x + lebar, y + tinggi), (255), 2)
+            plt.subplot(236)
+            plt.imshow(citra_dengan_kotak, cmap='gray')
+            plt.title('Kotak Pembatas')
             plt.axis('off')
         
-        # Subplot 6: Kotak Pembatas
-        x, y, lebar, tinggi = cv.boundingRect(kontur[0])
-        citra_dengan_kotak = citra_base.copy()
-        cv.rectangle(citra_dengan_kotak, (x, y), (x + lebar, y + tinggi), (255), 2)
-        plt.subplot(236)
-        plt.imshow(citra_dengan_kotak, cmap='gray')
-        plt.title('Kotak Pembatas')
-        plt.axis('off')
-    
-    plt.tight_layout()
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-    plt.savefig(temp_file.name, bbox_inches='tight', dpi=300)
-    plt.close()
-    return temp_file.name
+        plt.tight_layout()
+        # Save the plot properly
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        plt.savefig(temp_file.name, bbox_inches='tight', dpi=300)
+        plt.close()  # Make sure to close the figure
+        return temp_file.name
+        
+    except Exception as e:
+        plt.close()  # Make sure to close in case of error
+        raise e
 
 def main():
     st.set_page_config(page_title="Aplikasi Web Pengolahan Citra", layout="wide")
@@ -303,10 +309,17 @@ def main():
                         citra_proses_rgb = cv.cvtColor(citra_diubah_ukuran, cv.COLOR_GRAY2RGB)
                         cv.drawContours(citra_proses_rgb, kontur, -1, (0, 255, 0), 3)
                         
-                        plot_path = save_plot_to_file(citra_asli, citra_threshold, citra_base, citra_proses_rgb, kontur, faktor_skala)
-                        st.image(plot_path, caption="Visualisasi Deteksi Kontur", use_container_width=True)
-                        os.unlink(plot_path)
-                    
+                        with col1:
+                            # First save the plot
+                            plot_path = save_plot_to_file(citra_asli, citra_threshold, citra_base, citra_proses_rgb, kontur, faktor_skala)
+                            # Then display it with st.image
+                            try:
+                                st.image(plot_path, caption="Visualisasi Deteksi Kontur", use_column_width=True)
+                            finally:
+                                # Make sure we clean up the temporary file
+                                if os.path.exists(plot_path):
+                                    os.unlink(plot_path)
+                        
                     with col2:
                         # Radar chart for shape properties
                         categories = ['Circularity', 'Solidity', 'Extent']

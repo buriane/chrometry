@@ -387,9 +387,6 @@ class ColorSegmentationProcessor:
     def visualize_palette(self):
         """
         Creates a visualization of the extracted color palette.
-        
-        Returns:
-        fig: Matplotlib figure object
         """
         if self.rgb_palette is None:
             raise ValueError("No RGB palette extracted. Call extract_color_palette() first.")
@@ -605,9 +602,6 @@ class ColorSegmentationProcessor:
 def create_color_segmentation_ui(uploaded_image):
     """
     Creates Streamlit UI for color segmentation functionality.
-    
-    Args:
-    uploaded_image: Uploaded image file from Streamlit
     """
     if uploaded_image is not None:
         try:
@@ -625,126 +619,58 @@ def create_color_segmentation_ui(uploaded_image):
             st.write(f"Palet warna citra Anda saat ini memiliki {num_colors} warna")
             
             with st.spinner("Processing color segmentation..."):
-                # Create processor instance
                 processor = ColorSegmentationProcessor(image, num_colors)
-                
-                # Extract color palette
                 rgb_palette = processor.extract_color_palette()
                 
-                # Create two columns for display
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    # Title for original image
                     st.subheader("Citra Asli")
-                    # Display original image
-                    st.image(image, use_container_width=True)
+                    st.image(image, use_column_width=True)
                 
                 with col2:
-                    # Title for segmented image
                     st.subheader("Citra Tersegmentasi")
-                    # Display segmented image
                     segmented_img = processor.segment_image()
-                    st.image(segmented_img, use_container_width=True)
+                    st.image(segmented_img, use_column_width=True)
                 
-                # Visualize color palette
+                # Visualizations
                 st.subheader("Palet Warna Citra")
                 palette_fig = processor.visualize_palette()
-                st.pyplot(fig=palette_fig, use_container_width=True)
+                st.pyplot(palette_fig)
                 
-                # Visualize dominant color palette
                 st.subheader("Palet Warna Dominan")
                 dominant_palette_fig = processor.visualize_dominant_palette()
-                st.pyplot(fig=dominant_palette_fig, use_container_width=True)
+                st.pyplot(dominant_palette_fig)
                 
-                # Display dominant color information
-                st.subheader("Informasi Warna Dominan")
-                dominant_info = processor.get_dominant_color_info(top_n=5)
-                
-                # Create columns for dominant colors
-                cols = st.columns(min(5, len(dominant_info)))
-                for i, color_info in enumerate(dominant_info):
-                    with cols[i]:
-                        st.markdown(f"""
-                        <div style="text-align: center;">
-                            <div style="background-color: {color_info['hex']}; 
-                                       width: 80px; height: 80px; 
-                                       margin: 0 auto; 
-                                       border-radius: 50%; 
-                                       border: 2px solid #ddd;"></div>
-                            <p><strong>#{i+1}</strong></p>
-                            <p>{color_info['hex']}</p>
-                            <p>{color_info['percentage']:.1f}%</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                
-                # Create two columns for distribution charts
+                # Distribution visualizations
                 dist_col1, dist_col2 = st.columns(2)
                 
                 with dist_col1:
-                    # Add pie chart for color distribution
                     st.subheader("Distribusi Warna")
                     distribution_fig = processor.visualize_color_distribution()
-                    st.pyplot(fig=distribution_fig, use_container_width=True)
+                    st.pyplot(distribution_fig)
                 
                 with dist_col2:
-                    # Add pie chart for color category distribution
                     st.subheader("Distribusi Kategori Warna")
                     category_pie_fig, category_bar_fig = processor.visualize_color_category_distribution()
-                    st.pyplot(fig=category_pie_fig, use_container_width=True)
+                    st.pyplot(category_pie_fig)
                 
-                # Add bar chart for color category percentages
                 st.subheader("Persentase Kategori Warna")
-                st.pyplot(fig=category_bar_fig, use_container_width=True)
+                st.pyplot(category_bar_fig)
                 
-                # Add RGB Statistics Tables
-                st.subheader("Statistik Fitur Warna RGB")
-                
-                # Get RGB statistics
+                # Statistics tables
                 overall_stats_df, palette_stats_df = processor.get_rgb_statistics()
                 
-                # Create two columns for the statistics tables
                 stats_col1, stats_col2 = st.columns(2)
-                
                 with stats_col1:
                     st.write("**Statistik RGB Keseluruhan Citra:**")
-                    st.dataframe(overall_stats_df, use_container_width=True)
+                    st.dataframe(overall_stats_df)
                 
                 with stats_col2:
                     st.write("**Statistik RGB Palet Warna:**")
-                    # Add color preview column to the dataframe display
-                    st.dataframe(palette_stats_df, use_container_width=True)
+                    st.dataframe(palette_stats_df)
                 
-                # Display detailed category information
-                st.subheader("Detail Kategori Warna")
-                category_dist = processor.get_color_category_distribution()
-                
-                for category, percentage in category_dist['categories'].items():
-                    with st.expander(f"{category} ({percentage:.1f}%)"):
-                        colors_in_category = category_dist['detailed_data'][category]
-                        
-                        # Create columns for colors in this category
-                        if colors_in_category:
-                            color_cols = st.columns(min(len(colors_in_category), 5))
-                            for i, color_data in enumerate(colors_in_category):
-                                if i < len(color_cols):
-                                    with color_cols[i]:
-                                        st.markdown(f"""
-                                        <div style="text-align: center;">
-                                            <div style="background-color: {color_data['hex']}; 
-                                                       width: 60px; height: 60px; 
-                                                       margin: 0 auto; 
-                                                       border-radius: 50%; 
-                                                       border: 2px solid #ddd;"></div>
-                                            <p><small>{color_data['hex']}</small></p>
-                                            <p><small>{color_data['percentage']:.1f}%</small></p>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                
-                # Export options (CSV only)
-                st.subheader("Export Data")
-                
-                # Create columns for different export options
+                # Export buttons
                 export_col1, export_col2 = st.columns(2)
                 
                 with export_col1:
@@ -753,21 +679,16 @@ def create_color_segmentation_ui(uploaded_image):
                         label="Export Palet Warna (CSV)",
                         data=palette_csv,
                         file_name="color_palette.csv",
-                        icon=":material/download:",
-                        mime="text/csv",
-                        use_container_width=True
+                        mime="text/csv"
                     )
                 
                 with export_col2:
-                    # Export RGB statistics
                     stats_csv = palette_stats_df.to_csv(index=False)
                     st.download_button(
                         label="Export Statistik RGB (CSV)",
                         data=stats_csv,
                         file_name="rgb_statistics.csv",
-                        icon=":material/download:",
-                        mime="text/csv",
-                        use_container_width=True
+                        mime="text/csv"
                     )
                     
         except Exception as e:
