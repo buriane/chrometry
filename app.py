@@ -3,7 +3,9 @@ import os
 import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
-import plotly.graph_objects as go
+import tempfile
+import pandas as pd
+from typing import List, Tuple, Dict
 from contour import (
     muat_citra, 
     ubah_ukuran_citra, 
@@ -13,9 +15,14 @@ from contour import (
     analisis_properti_geometri
 )
 from color_segmentation import process_color_segmentation
-from typing import List, Tuple, Dict
-import tempfile
-import pandas as pd
+
+try:
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    import matplotlib.pyplot as plt
+    print("Warning: Plotly not available, falling back to matplotlib")
 
 def analisis_properti_geometri(kontur: np.ndarray) -> Dict:
     """
@@ -352,23 +359,34 @@ def main():
                         categories = ['Circularity', 'Solidity', 'Extent']
                         values = [properties['circularity'], properties['solidity'], properties['extent']]
                         
-                        fig = go.Figure(data=go.Scatterpolar(
-                            r=values + [values[0]],
-                            theta=categories + [categories[0]],
-                            fill='toself'
-                        ))
-                        
-                        fig.update_layout(
-                            polar=dict(
-                                radialaxis=dict(
-                                    visible=True,
-                                    range=[0, 1]
-                                )),
-                            showlegend=False,
-                            title="Properti Bentuk"
-                        )
-                        
-                        st.plotly_chart(fig, use_container_width=True)
+                        if PLOTLY_AVAILABLE:
+                            fig = go.Figure(data=go.Scatterpolar(
+                                r=values + [values[0]],
+                                theta=categories + [categories[0]],
+                                fill='toself'
+                            ))
+                            
+                            fig.update_layout(
+                                polar=dict(
+                                    radialaxis=dict(
+                                        visible=True,
+                                        range=[0, 1]
+                                    )),
+                                showlegend=False,
+                                title="Properti Bentuk"
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            # Fallback to matplotlib
+                            fig = plt.figure(figsize=(6, 6))
+                            ax = fig.add_subplot(111, polar=True)
+                            ax.fill(values + [values[0]], alpha=0.25)
+                            ax.set_xticks(np.linspace(0, 2 * np.pi, len(categories), endpoint=False))
+                            ax.set_xticklabels(categories)
+                            ax.set_yticklabels([])
+                            plt.title("Properti Bentuk")
+                            st.pyplot(fig)
                     
                     # Additional geometric information in an expander
                     with st.expander("Detail Properti Geometri"):
