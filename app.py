@@ -14,7 +14,7 @@ from contour import (
     deteksi_bentuk_geometri,
     analisis_properti_geometri
 )
-from color_segmentation import process_color_segmentation
+from color_segmentation import ColorSegmentationProcessor, create_color_segmentation_ui
 
 try:
     import plotly.graph_objects as go
@@ -86,17 +86,6 @@ def save_plot_to_file(
 ) -> str:
     """
     Menyimpan plot visualisasi ke file sementara dan mengembalikan jalurnya.
-    
-    Args:
-        citra_asli (np.ndarray): Citra grayscale asli.
-        citra_threshold (np.ndarray): Citra hasil threshold.
-        citra_base (np.ndarray): Citra grayscale dasar tanpa kontur berwarna.
-        citra_proses_rgb (np.ndarray): Citra RGB dengan kontur berwarna.
-        kontur (List[np.ndarray]): Daftar kontur yang terdeteksi.
-        faktor_skala (float): Faktor skala untuk mengubah ukuran citra.
-        
-    Returns:
-        str: Jalur ke file plot yang disimpan.
     """
     plt.figure(figsize=(15, 10))
     
@@ -131,31 +120,22 @@ def save_plot_to_file(
         plt.title(f'Titik Kontur (total: {len(kontur[0])})')
         plt.axis('off')
         
-        # Subplot 5: Poligon Aproksimasi
+        # Subplot 5: Convex Hull
         momen = cv.moments(kontur[0])
         if momen['m00'] != 0:
             pusat_x = int(momen['m10'] / momen['m00'])
             pusat_y = int(momen['m01'] / momen['m00'])
-            citra_poligon = cv.cvtColor(citra_base.copy(), cv.COLOR_GRAY2RGB)
-            keliling = cv.arcLength(kontur[0], True)
-            epsilon = 0.005 * keliling  # Sama dengan contour.py
-            poligon_aproksimasi = cv.approxPolyDP(kontur[0], epsilon, True)
-            cv.polylines(citra_poligon, [poligon_aproksimasi], True, (0, 0, 255), 2)
-            cv.circle(citra_poligon, (pusat_x, pusat_y), 5, (255, 0, 0), -1)
+            citra_convex_hull = cv.cvtColor(citra_base.copy(), cv.COLOR_GRAY2RGB)
+            
+            # Buat convex hull dengan warna merah dan garis tebal
+            hull = cv.convexHull(kontur[0])
+            cv.polylines(citra_convex_hull, [hull], True, (255, 0, 0), 4)  # Warna merah dengan ketebalan 4
+            cv.circle(citra_convex_hull, (pusat_x, pusat_y), 5, (0, 255, 0), -1)  # Titik pusat hijau
+            
             plt.subplot(235)
-            plt.imshow(citra_poligon)
-            plt.title(f'Poligon Aproksimasi ({len(poligon_aproksimasi)} titik)')
+            plt.imshow(citra_convex_hull)
+            plt.title(f'Convex Hull ({len(hull)} titik)')
             plt.axis('off')
-        
-        # Subplot 5: Convex Hull
-        ex_hull = cv.convexHull(kontur[0])
-        titik_hull = np.concatenate((ex_hull[:, 0, :], ex_hull[:1, 0, :]), axis=0)
-        plt.subplot(235)
-        plt.imshow(citra_base, cmap='gray')
-        plt.plot(titik_hull[:, 0], titik_hull[:, 1], 'r-', label='Convex Hull')
-        plt.title('Convex Hull')
-        plt.legend()
-        plt.axis('off')
         
         # Subplot 6: Kotak Pembatas
         x, y, lebar, tinggi = cv.boundingRect(kontur[0])
@@ -175,26 +155,32 @@ def save_plot_to_file(
 def main():
     st.set_page_config(page_title="Aplikasi Web Pengolahan Citra", layout="wide")
     
-    st.title("Aplikasi Pengolahan Citra Terpadu")
-    st.write("Unggah citra untuk melihat hasil deteksi kontur dan segmentasi warna secara bersamaan.")
+    st.title("Aplikasi Pengolahan Citra Digital")
+    st.write("Unggah citra untuk analisis deteksi kontur dan segmentasi warna.")
     
-    # Penjelasan aplikasi
+    # Penjelasan umum aplikasi
     with st.expander("Tentang Aplikasi", expanded=False):
         st.markdown("""
-        Aplikasi ini menggabungkan dua teknik pengolahan citra dalam satu antarmuka yang terintegrasi:
+        Aplikasi ini menyediakan dua fitur utama pengolahan citra:
         
-        **1. Deteksi Kontur:**
+        **1. Deteksi Kontur dan Analisis Bentuk:**
         - Mengidentifikasi bentuk dan garis tepi objek dalam citra
         - Menghitung properti seperti luas, keliling, dan fitur geometris
         - Menampilkan visualisasi kontur, poligon aproksimasi, dan bounding box
+        - Analisis properti geometri detail seperti circularity, solidity, dan extent
         
         **2. Segmentasi Warna:**
-        - Menganalisis komposisi warna dalam citra menggunakan K-Means clustering
-        - Mengidentifikasi warna-warna dominan dan mengklasifikasikannya
-        - Menampilkan statistik warna, distribusi kategori, dan palet warna
+        - Ekstraksi palet warna dominan dari citra
+        - Segmentasi citra berdasarkan warna dominan menggunakan K-means clustering
+        - Visualisasi palet warna yang diekstrak
+        - Export data palet dalam format CSV
         
-        Cukup unggah satu citra, dan Anda akan mendapatkan analisis lengkap dari kedua teknik tersebut.
+        Unggah satu citra untuk mendapatkan analisis lengkap dari kedua fitur tersebut.
         """)
+    
+    # Parameter untuk deteksi kontur (dipindahkan ke awal)
+    st.subheader("Parameter Deteksi Kontur")
+    faktor_skala = st.slider("Faktor Skala", min_value=1.0, max_value=10.0, value=4.0, step=0.1, help="Atur faktor skala untuk mengubah ukuran citra")
     
     # Tombol unduh untuk contoh citra
     st.subheader("Unduh Contoh Citra")
@@ -203,7 +189,7 @@ def main():
     
     contoh_citra = [
         ("botol.jpeg", "Kernel 2", col1),
-        ("pocari.png", "Kernel 1", col2),
+        ("pocari.png", "Kernel 1.3", col2),
         ("mouse.png", "Kernel 2.4", col3),
         ("container.jpg", "Kernel 4", col4)
     ]
@@ -222,50 +208,29 @@ def main():
         else:
             col.warning(f"File {image_name} tidak ditemukan.")
     
-    # Pengunggah citra
-    uploaded_file = st.file_uploader("Pilih citra...", type=["jpg", "jpeg", "png"], help="Unggah citra dalam format JPG, JPEG, atau PNG")
-    
-    # Parameter untuk kedua mode
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Parameter Deteksi Kontur")
-        faktor_skala = st.slider("Faktor Skala", min_value=1.0, max_value=10.0, value=4.0, step=0.1, help="Atur faktor skala untuk mengubah ukuran citra")
-    
-    with col2:
-        st.subheader("Parameter Segmentasi Warna")
-        auto_determine = st.checkbox("Tentukan jumlah cluster otomatis", value=True, help="Menentukan jumlah optimal cluster warna secara otomatis")
-        
-        n_clusters = None if auto_determine else st.slider(
-            "Jumlah Cluster Warna", 
-            min_value=2, 
-            max_value=10, 
-            value=5, 
-            step=1, 
-            help="Tentukan jumlah cluster warna yang diinginkan"
-        )
-        
-        min_percentage = st.slider(
-            "Persentase Minimum Warna", 
-            min_value=0.1, 
-            max_value=10.0, 
-            value=1.0, 
-            step=0.1, 
-            help="Warna dengan persentase di bawah nilai ini akan diabaikan"
-        )
+    # Upload gambar utama
+    st.subheader("Unggah Citra")
+    uploaded_file = st.file_uploader(
+        "Pilih citra untuk dianalisis...", 
+        type=["jpg", "jpeg", "png"], 
+        help="Unggah citra dalam format JPG, JPEG, atau PNG"
+    )
     
     if uploaded_file is not None:
+        # ===== DETEKSI KONTUR DAN ANALISIS BENTUK =====
+        st.header("🔍 Deteksi Kontur dan Analisis Bentuk")
+        
         try:
             # Simpan file yang diunggah ke lokasi sementara
             with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
                 temp_file.write(uploaded_file.read())
                 temp_file_path = temp_file.name
             
-            # Container untuk hasil analisis terpadu
+            # Container untuk hasil analisis
             with st.container():
-                st.header("Hasil Analisis Citra")
+                st.subheader("Hasil Analisis Citra")
                 
-                with st.spinner("Memproses citra..."):
+                with st.spinner("Memproses citra untuk deteksi kontur..."):
                     # ===== DETEKSI KONTUR =====
                     citra_asli = muat_citra(temp_file_path)
                     citra_diubah_ukuran = ubah_ukuran_citra(citra_asli, faktor_skala)
@@ -311,21 +276,9 @@ def main():
                         citra_threshold = citra_threshold_terbaik
                         mode_adaptif, nilai_threshold, ukuran_kernel, invert_threshold = parameter_terbaik
                         st.info(f"Parameter terbaik: Mode {'Adaptif' if mode_adaptif else 'Global'}, Threshold: {nilai_threshold}, Kernel: {ukuran_kernel}x{ukuran_kernel}, Inversi: {'Ya' if invert_threshold else 'Tidak'}")
-                    
-                    # ===== SEGMENTASI WARNA =====
-                    results, temp_files = process_color_segmentation(
-                        temp_file_path,
-                        n_clusters=n_clusters,
-                        auto_determine=auto_determine,
-                        max_clusters=8,
-                        min_percentage=min_percentage
-                    )
-                    
-                    color_info = results['color_info']
-                    color_features = results['color_features']
                 
-                # Rename and reorganize the section
-                st.subheader("1. Analisis Bentuk dan Kontur")
+                # Analisis Bentuk dan Kontur
+                st.subheader("Analisis Bentuk dan Kontur")
                 
                 if kontur:
                     # Create two columns for metrics
@@ -408,73 +361,17 @@ def main():
                             st.write(f"- Extent: {properties['extent']:.3f}")
                 else:
                     st.error("Tidak ada kontur yang ditemukan pada citra dengan semua parameter yang dicoba.")
-
-                # Remove the geometric analysis section from the bottom
-                # (delete the previous geometric analysis section)
-
-                # Bagian 2: Hasil Segmentasi Warna
-                st.subheader("2. Hasil Segmentasi Warna")
-                
-                st.image(temp_files[0], caption="Visualisasi Segmentasi Warna", use_container_width=True)
-                
-                st.write("**Warna-Warna Dominan:**")
-                st.dataframe(
-                    color_info[['Kategori', 'Nama Warna', 'Persentase (%)', 'RGB', 'Hex']],
-                    use_container_width=True
-                )
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.write("**Palet Warna Dominan:**")
-                    st.image(temp_files[1], use_container_width=True)
-                
-                with col2:
-                    st.write("**Distribusi Kategori Warna:**")
-                    st.image(temp_files[2], use_container_width=True)
-                
-                st.write("**Statistik Fitur Warna:**")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.write("Statistik Dasar")
-                    basic_features = {
-                        'Kecerahan Rata-rata': color_features['brightness'],
-                        'Kontras': color_features['contrast'],
-                        'Colorfulness': color_features['colorfulness'],
-                        'Keberagaman Warna': color_features['color_diversity'] * 100,
-                        'Keseimbangan Warna': color_features['color_balance']
-                    }
-                    
-                    basic_df = pd.DataFrame({
-                        'Metrik': list(basic_features.keys()),
-                        'Nilai': list(basic_features.values())
-                    })
-                    
-                    basic_df['Nilai'] = basic_df['Nilai'].round(2)
-                    st.table(basic_df)
-                
-                with col2:
-                    st.write("Statistik RGB")
-                    rgb_features = {
-                        'Rata-rata Merah': color_features['mean_red'],
-                        'Rata-rata Hijau': color_features['mean_green'],
-                        'Rata-rata Biru': color_features['mean_blue'],
-                        'Std. Dev Merah': color_features['std_red'],
-                        'Std. Dev Hijau': color_features['std_green'],
-                        'Std. Dev Biru': color_features['std_blue']
-                    }
-                    
-                    rgb_df = pd.DataFrame({
-                        'Metrik': list(rgb_features.keys()),
-                        'Nilai': list(rgb_features.values())
-                    })
-                    
-                    rgb_df['Nilai'] = rgb_df['Nilai'].round(2)
-                    st.table(rgb_df)
             
-            for file_path in temp_files:
-                os.unlink(file_path)
+            # ===== SEGMENTASI WARNA =====
+            st.markdown("---")  # Divider line
+            st.header("🎨 Segmentasi Warna (Color Segmentation)")
+            st.write("Ekstraksi palet warna dan segmentasi warna menggunakan K-means clustering.")
+            
+            # Reset file pointer untuk segmentasi warna
+            uploaded_file.seek(0)
+            
+            # Gunakan fungsi UI dari color_segmentation.py
+            create_color_segmentation_ui(uploaded_file)
             
             os.unlink(temp_file_path)
         

@@ -1,897 +1,775 @@
-import cv2 as cv
-import numpy as np
-import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
-from collections import Counter
-from matplotlib.colors import rgb2hex, hex2color, to_rgb
-import pandas as pd
-from typing import List, Tuple, Dict, Optional, Union
-from sklearn.metrics import silhouette_score
-import colorsys
+import numpy as np
+import cv2 as cv
+import matplotlib.pyplot as plt
+import streamlit as st
 import tempfile
-import os
+from PIL import Image
+import pandas as pd
 
-def preprocessing_for_color_segmentation(
-    image: np.ndarray, 
-    denoise_strength: int = 9,
-    contrast_limit: float = 2.0,
-    color_space: str = 'LAB'
-) -> np.ndarray:
-    """
-    Enhanced preprocessing for color segmentation with customizable parameters.
-    
-    Args:
-        image (np.ndarray): Input image in BGR or RGB format.
-        denoise_strength (int): Strength of the bilateral filter (higher = more smoothing).
-        contrast_limit (float): CLAHE contrast limit.
-        color_space (str): Color space for enhancement ('LAB', 'HSV', or 'RGB').
+class ColorSegmentationProcessor:
+    def __init__(self, image, n_colors=7):
+        """
+        Initializes the ColorSegmentationProcessor class.
         
-    Returns:
-        np.ndarray: Processed image for color segmentation in RGB format.
-    """
-    # Ensure image is in the right format
-    if len(image.shape) == 2:  # If grayscale, convert to RGB
-        image = cv.cvtColor(image, cv.COLOR_GRAY2RGB)
-    elif image.shape[2] == 3 and np.max(image) <= 1.0:
-        image = (image * 255).astype(np.uint8)  # Normalize if image is in float format
-    
-    # Convert to BGR if input is in RGB format (for OpenCV operations)
-    img_bgr = cv.cvtColor(image, cv.COLOR_RGB2BGR) if image.shape[2] == 3 else image
-    
-    # Apply bilateral filter to reduce noise while preserving edges
-    img_filtered = cv.bilateralFilter(img_bgr, denoise_strength, 75, 75)
-    
-    # Apply additional denoising for smoother regions
-    img_filtered = cv.fastNlMeansDenoisingColored(img_filtered, None, 10, 10, 7, 21)
-    
-    # Enhance contrast using the specified color space
-    if color_space == 'LAB':
-        # LAB color space enhancement (better for perceptual color differences)
-        lab = cv.cvtColor(img_filtered, cv.COLOR_BGR2LAB)
-        l, a, b = cv.split(lab)
-        clahe = cv.createCLAHE(clipLimit=contrast_limit, tileGridSize=(8, 8))
-        l = clahe.apply(l)
-        lab = cv.merge((l, a, b))
-        img_enhanced = cv.cvtColor(lab, cv.COLOR_LAB2BGR)
-    
-    elif color_space == 'HSV':
-        # HSV color space enhancement (better for color-based segmentation)
-        hsv = cv.cvtColor(img_filtered, cv.COLOR_BGR2HSV)
-        h, s, v = cv.split(hsv)
-        clahe = cv.createCLAHE(clipLimit=contrast_limit, tileGridSize=(8, 8))
-        v = clahe.apply(v)
-        hsv = cv.merge((h, s, v))
-        img_enhanced = cv.cvtColor(hsv, cv.COLOR_HSV2BGR)
-    
-    else:  # RGB enhancement
-        # Apply CLAHE to each RGB channel independently
-        r, g, b = cv.split(img_filtered)
-        clahe = cv.createCLAHE(clipLimit=contrast_limit, tileGridSize=(8, 8))
-        r = clahe.apply(r)
-        g = clahe.apply(g)
-        b = clahe.apply(b)
-        img_enhanced = cv.merge((r, g, b))
-    
-    # Convert back to RGB for clustering
-    img_rgb = cv.cvtColor(img_enhanced, cv.COLOR_BGR2RGB)
-    
-    return img_rgb
+        Args:
+        image: Input image (numpy array or PIL image)
+        n_colors: The number of colors to extract from the image (default is 7)
+        """
+        self.image = image
+        self.n_colors = n_colors
+        self.kmeans = KMeans(n_clusters=self.n_colors, random_state=42)
+        self.palette = None
+        self.rgb_palette = None
+        self.processed_pixels = None
+        self.color_percentages = None
+        self.cluster_labels = None
+        self.dominant_colors = None
 
-def determine_optimal_clusters(
-    image: np.ndarray, 
-    max_clusters: int = 10, 
-    min_clusters: int = 2,
-    method: str = 'elbow'
-) -> int:
-    """
-    Determine the optimal number of color clusters using either elbow method or silhouette score.
-    
-    Args:
-        image (np.ndarray): Image in RGB format.
-        max_clusters (int): Maximum number of clusters to consider.
-        min_clusters (int): Minimum number of clusters to consider.
-        method (str): Method to determine optimal clusters ('elbow' or 'silhouette').
+    def preprocess_image(self):
+        """
+        Preprocesses the image by converting to LAB color space and reshaping for clustering.
         
-    Returns:
-        int: Optimal number of clusters.
-    """
-    # Reshape image for clustering
-    pixels = image.reshape(-1, 3)
-    
-    # Take a sample to speed up computation for large images
-    sample_size = min(100000, pixels.shape[0])
-    pixel_sample = pixels[np.random.choice(pixels.shape[0], sample_size, replace=False)]
-    
-    if method == 'elbow':
-        # Elbow method implementation
-        distortions = []
-        for i in range(min_clusters, max_clusters + 1):
-            kmeans = KMeans(n_clusters=i, random_state=42, n_init=10)
-            kmeans.fit(pixel_sample)
-            distortions.append(kmeans.inertia_)
+        Returns:
+        pixel_values: Reshaped pixel values ready for clustering
+        """
+        # Convert image to numpy array if needed
+        if hasattr(self.image, 'convert'):
+            img_array = np.array(self.image.convert('RGB'))
+        elif hasattr(self.image, 'shape'):
+            img_array = self.image
+        else:
+            # Handle other types of image objects
+            img_array = np.array(self.image)
         
-        # Calculate the rate of change in distortion
-        deltas = np.diff(distortions)
-        # Find "elbow point" - where the rate of improvement significantly slows
-        delta_changes = np.diff(deltas)
-        elbow_point = np.argmin(delta_changes) + min_clusters
+        # Ensure image is in correct format
+        if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+            # Convert RGB to LAB color space
+            lab_image = cv.cvtColor(img_array, cv.COLOR_RGB2LAB)
+        else:
+            raise ValueError("Image must be in RGB format with shape (height, width, 3)")
         
-        return elbow_point
-    
-    elif method == 'silhouette':
-        # Silhouette score implementation
-        silhouette_scores = []
-        for i in range(min_clusters, max_clusters + 1):
-            kmeans = KMeans(n_clusters=i, random_state=42, n_init=10)
-            cluster_labels = kmeans.fit_predict(pixel_sample)
+        # Reshape image to be a list of pixels
+        pixel_values = lab_image.reshape((-1, 3))
+        self.processed_pixels = pixel_values
+        
+        return pixel_values
+
+    def extract_color_palette(self):
+        """
+        Extracts color palette using K-means clustering.
+        
+        Returns:
+        rgb_palette: The RGB color palette as a numpy array
+        """
+        if self.processed_pixels is None:
+            pixel_values = self.preprocess_image()
+        else:
+            pixel_values = self.processed_pixels
+        
+        # Fit K-means clustering
+        self.kmeans.fit(pixel_values)
+        self.palette = self.kmeans.cluster_centers_
+        
+        # Get cluster labels and calculate percentages
+        self.cluster_labels = self.kmeans.labels_
+        unique, counts = np.unique(self.cluster_labels, return_counts=True)
+        total_pixels = len(self.cluster_labels)
+        self.color_percentages = (counts / total_pixels) * 100
+        
+        # Convert LAB palette back to RGB
+        lab_palette = np.uint8(self.palette)
+        lab_palette_3d = lab_palette.reshape(1, -1, 3)
+        rgb_palette_3d = cv.cvtColor(lab_palette_3d, cv.COLOR_LAB2RGB)
+        self.rgb_palette = rgb_palette_3d.reshape(-1, 3)
+        
+        # Extract dominant colors (sort by percentage)
+        self._extract_dominant_colors()
+        
+        return self.rgb_palette
+
+    def _extract_dominant_colors(self):
+        """
+        Extracts dominant colors sorted by their percentage in the image.
+        """
+        if self.rgb_palette is not None and self.color_percentages is not None:
+            # Create pairs of (color, percentage, index) and sort by percentage
+            color_data = [(self.rgb_palette[i], self.color_percentages[i], i) 
+                         for i in range(len(self.rgb_palette))]
             
-            # Only compute silhouette if we have at least 2 clusters
-            if i > 1:
-                silhouette_avg = silhouette_score(pixel_sample, cluster_labels)
-                silhouette_scores.append(silhouette_avg)
+            # Sort by percentage in descending order
+            color_data.sort(key=lambda x: x[1], reverse=True)
+            
+            self.dominant_colors = {
+                'colors': [item[0] for item in color_data],
+                'percentages': [item[1] for item in color_data],
+                'original_indices': [item[2] for item in color_data]
+            }
+
+    def classify_color_category(self, rgb_color):
+        """
+        Classifies a color into primary, secondary, tertiary, or other categories.
+        
+        Args:
+        rgb_color: RGB color array [R, G, B]
+        
+        Returns:
+        category: String indicating color category
+        """
+        r, g, b = rgb_color
+        
+        # Convert to HSV for better color classification
+        rgb_normalized = np.array([[[r, g, b]]], dtype=np.uint8)
+        hsv = cv.cvtColor(rgb_normalized, cv.COLOR_RGB2HSV)[0][0]
+        h, s, v = hsv
+        
+        # Define thresholds
+        saturation_threshold = 50  # Low saturation = grayscale/neutral
+        brightness_threshold_low = 50  # Very dark
+        brightness_threshold_high = 200  # Very bright
+        
+        # Check for grayscale/neutral colors
+        if s < saturation_threshold:
+            if v < brightness_threshold_low:
+                return "Lainnya (Hitam/Gelap)"
+            elif v > brightness_threshold_high:
+                return "Lainnya (Putih/Terang)"
             else:
-                silhouette_scores.append(0)
+                return "Lainnya (Abu-abu)"
         
-        # Return the number of clusters with the highest silhouette score
-        optimal_clusters = np.argmax(silhouette_scores) + min_clusters
-        return optimal_clusters
-    
-    else:
-        # Default to 5 clusters if method is not recognized
-        return 5
-
-def segment_colors(
-    image: np.ndarray, 
-    n_clusters: int = None,
-    auto_determine: bool = True,
-    max_clusters: int = 10,
-    use_preprocessing: bool = False  # New parameter to toggle preprocessing
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[np.ndarray]]:
-    """
-    Perform color segmentation using K-Means clustering with optional automatic cluster determination.
-    
-    Args:
-        image (np.ndarray): Input image in BGR or RGB format.
-        n_clusters (int, optional): Number of color clusters to use. If None and auto_determine is True,
-                                   will use automatic determination.
-        auto_determine (bool): Whether to automatically determine the optimal number of clusters.
-        max_clusters (int): Maximum number of clusters to consider if auto_determine is True.
-        use_preprocessing (bool): Whether to use preprocessing or work with the original image.
+        # Define hue ranges for color categories (in HSV, hue is 0-179 in OpenCV)
+        # Primary colors: Red, Blue, Yellow (Green is also primary but less common in art)
+        if (h >= 0 and h <= 10) or (h >= 170 and h <= 179):  # Red
+            return "Primer (Merah)"
+        elif h >= 100 and h <= 130:  # Blue
+            return "Primer (Biru)"
+        elif h >= 20 and h <= 35:  # Yellow
+            return "Primer (Kuning)"
+        elif h >= 40 and h <= 80:  # Green
+            return "Primer (Hijau)"
         
-    Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray, List[np.ndarray]]: 
-            - Segmented image
-            - Image with cluster labels
-            - Cluster centers (dominant colors)
-            - List of cluster masks
-    """
-    # Ensure image is in RGB format for clustering
-    if len(image.shape) == 2:  # If grayscale, convert to RGB
-        image_rgb = cv.cvtColor(image, cv.COLOR_GRAY2RGB)
-    elif image.shape[2] == 3:
-        # Check if image is BGR (OpenCV default) or RGB
-        # This is a heuristic - we assume if it's from cv.imread it's BGR
-        if np.mean(image[:,:,0]) < np.mean(image[:,:,2]):  # BGR tends to have B channel < R channel
-            image_rgb = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+        # Secondary colors: Orange, Purple, Green (mixing of primaries)
+        elif h >= 11 and h <= 19:  # Orange (Red + Yellow)
+            return "Sekunder (Oranye)"
+        elif h >= 131 and h <= 169:  # Purple/Magenta (Red + Blue)
+            return "Sekunder (Ungu)"
+        elif h >= 81 and h <= 99:  # Cyan (Blue + Green, though green is primary)
+            return "Sekunder (Cyan)"
+        
+        # Tertiary colors (mixing of primary and secondary)
+        elif h >= 36 and h <= 39:  # Yellow-Green
+            return "Tersier (Kuning-Hijau)"
+        
+        # Other colors that don't fit clearly into above categories
         else:
-            image_rgb = image
-    else:
-        image_rgb = image
-    
-    # Apply preprocessing if requested
-    if use_preprocessing:
-        # Preprocess image for potentially better segmentation
-        preprocessed_img = preprocessing_for_color_segmentation(image_rgb)
-    else:
-        # Use original image
-        preprocessed_img = image_rgb
-    
-    # Determine optimal number of clusters if requested
-    if auto_determine or n_clusters is None:
-        n_clusters = determine_optimal_clusters(
-            preprocessed_img, 
-            max_clusters=max_clusters, 
-            min_clusters=2,
-            method='elbow'
-        )
-    
-    # Reshape image for clustering
-    h, w, c = preprocessed_img.shape
-    reshaped_img = preprocessed_img.reshape((h * w, c))
-    
-    # Apply K-Means for color clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    labels = kmeans.fit_predict(reshaped_img)
-    centers = kmeans.cluster_centers_
-    
-    # Create segmented image using cluster centers
-    segmented_img = centers[labels].reshape((h, w, c)).astype(np.uint8)
-    
-    # Reshape labels for visualization
-    label_img = labels.reshape((h, w))
-    
-    # Create individual cluster masks
-    cluster_images = []
-    for i in range(n_clusters):
-        cluster_mask = np.zeros((h, w), dtype=np.uint8)
-        cluster_mask[label_img == i] = 255
-        cluster_images.append(cluster_mask)
-    
-    return segmented_img, label_img, centers, cluster_images
+            return "Lainnya"
 
-def classify_color(rgb_color: np.ndarray) -> Tuple[str, str, float]:
-    """
-    Classify a color into primary, secondary, tertiary, or other categories
-    using HSV color space for better color differentiation.
-    
-    Args:
-        rgb_color (np.ndarray): RGB color to classify (0-255 range).
+    def get_color_category_distribution(self):
+        """
+        Analyzes the distribution of color categories in the extracted palette.
         
-    Returns:
-        Tuple[str, str, float]: Category, color name, and confidence score
-    """
-    # Normalize RGB to 0-1 range
-    r, g, b = rgb_color / 255.0
-    
-    # Convert to HSV for better color classification
-    h, s, v = colorsys.rgb_to_hsv(r, g, b)
-    
-    # Create a hue-based classification
-    hue_degrees = h * 360
-    
-    # Setup color categories with HSV ranges
-    PRIMARY_COLORS = {
-        'Merah': {'hue_range': [(0, 15), (345, 360)], 'min_saturation': 0.5, 'min_value': 0.2},
-        'Hijau': {'hue_range': [(90, 150)], 'min_saturation': 0.4, 'min_value': 0.2},
-        'Biru': {'hue_range': [(210, 270)], 'min_saturation': 0.4, 'min_value': 0.2},
-    }
-    
-    SECONDARY_COLORS = {
-        'Kuning': {'hue_range': [(40, 70)], 'min_saturation': 0.5, 'min_value': 0.5},
-        'Magenta': {'hue_range': [(280, 320)], 'min_saturation': 0.4, 'min_value': 0.2},
-        'Cyan': {'hue_range': [(170, 200)], 'min_saturation': 0.4, 'min_value': 0.2},
-    }
-    
-    TERTIARY_COLORS = {
-        'Oranye': {'hue_range': [(16, 39)], 'min_saturation': 0.5, 'min_value': 0.5},
-        'Chartreuse': {'hue_range': [(71, 89)], 'min_saturation': 0.5, 'min_value': 0.5},
-        'Spring green': {'hue_range': [(151, 169)], 'min_saturation': 0.4, 'min_value': 0.5},
-        'Azure': {'hue_range': [(201, 209)], 'min_saturation': 0.4, 'min_value': 0.5},
-        'Violet': {'hue_range': [(271, 279)], 'min_saturation': 0.4, 'min_value': 0.2},
-        'Rose': {'hue_range': [(321, 344)], 'min_saturation': 0.4, 'min_value': 0.2},
-    }
-    
-    # Function to check if a hue falls within specified ranges
-    def is_in_hue_range(hue, ranges):
-        return any(lower <= hue <= upper for lower, upper in ranges)
-    
-    # Check for grayscale
-    if s < 0.15:
-        if v < 0.15:
-            return 'Lainnya', 'Hitam', 0.9
-        elif v > 0.85:
-            return 'Lainnya', 'Putih', 0.9
-        else:
-            gray_level = int(v * 255)
-            return 'Lainnya', f'Abu-abu ({gray_level})', 0.9
-    
-    # Check through color categories
-    best_match = None
-    best_confidence = 0
-    color_category = 'Lainnya'
-    
-    # Check primary colors
-    for name, properties in PRIMARY_COLORS.items():
-        if (is_in_hue_range(hue_degrees, properties['hue_range']) and 
-            s >= properties['min_saturation'] and 
-            v >= properties['min_value']):
-            confidence = s * v  # Higher saturation and value = higher confidence
-            if confidence > best_confidence:
-                best_match = name
-                best_confidence = confidence
-                color_category = 'Primer'
-    
-    # Check secondary colors
-    for name, properties in SECONDARY_COLORS.items():
-        if (is_in_hue_range(hue_degrees, properties['hue_range']) and 
-            s >= properties['min_saturation'] and 
-            v >= properties['min_value']):
-            confidence = s * v
-            if confidence > best_confidence:
-                best_match = name
-                best_confidence = confidence
-                color_category = 'Sekunder'
-    
-    # Check tertiary colors
-    for name, properties in TERTIARY_COLORS.items():
-        if (is_in_hue_range(hue_degrees, properties['hue_range']) and 
-            s >= properties['min_saturation'] and 
-            v >= properties['min_value']):
-            confidence = s * v
-            if confidence > best_confidence:
-                best_match = name
-                best_confidence = confidence
-                color_category = 'Tersier'
-    
-    # If no match is found, use hue-based naming
-    if best_match is None:
-        if hue_degrees < 30 or hue_degrees > 330:
-            best_match = f'Merah Keabuan ({int(rgb_color[0])},{int(rgb_color[1])},{int(rgb_color[2])})'
-        elif hue_degrees < 90:
-            best_match = f'Kuning Keabuan ({int(rgb_color[0])},{int(rgb_color[1])},{int(rgb_color[2])})'
-        elif hue_degrees < 150:
-            best_match = f'Hijau Keabuan ({int(rgb_color[0])},{int(rgb_color[1])},{int(rgb_color[2])})'
-        elif hue_degrees < 210:
-            best_match = f'Cyan Keabuan ({int(rgb_color[0])},{int(rgb_color[1])},{int(rgb_color[2])})'
-        elif hue_degrees < 270:
-            best_match = f'Biru Keabuan ({int(rgb_color[0])},{int(rgb_color[1])},{int(rgb_color[2])})'
-        else:
-            best_match = f'Magenta Keabuan ({int(rgb_color[0])},{int(rgb_color[1])},{int(rgb_color[2])})'
-    
-    return color_category, best_match, best_confidence
-
-def analyze_color_dominance(
-    image: np.ndarray, 
-    centers: np.ndarray, 
-    labels: np.ndarray, 
-    min_percentage: float = 1.0
-) -> pd.DataFrame:
-    """
-    Enhanced analysis of dominant colors with improved classification and filtering.
-    
-    Args:
-        image (np.ndarray): Original image.
-        centers (np.ndarray): Cluster centers (dominant colors).
-        labels (np.ndarray): Pixel labels from clustering.
-        min_percentage (float): Minimum percentage to include in results.
+        Returns:
+        dict: Distribution of color categories with percentages
+        """
+        if self.dominant_colors is None:
+            raise ValueError("No dominant colors extracted. Call extract_color_palette() first.")
         
-    Returns:
-        pd.DataFrame: DataFrame with color information, filtered by minimum percentage.
-    """
-    # Count occurrence of each label
-    label_counts = Counter(labels.flatten())
-    total_pixels = len(labels.flatten())
-    
-    # Prepare color information
-    color_info = []
-    
-    # Sort clusters by size (descending)
-    for i, (cluster_idx, count) in enumerate(sorted(label_counts.items(), key=lambda x: x[1], reverse=True)):
-        center = centers[cluster_idx]
-        percentage = (count / total_pixels) * 100
+        category_data = {}
+        category_percentages = {}
         
-        # Skip colors with percentage below threshold
-        if percentage < min_percentage:
-            continue
-        
-        # Make sure RGB values are within 0-255 range
-        center_normalized = np.clip(center, 0, 255)
-        hex_color = rgb2hex(center_normalized / 255)
-        
-        # Classify color using enhanced classification
-        color_category, color_name, confidence = classify_color(center_normalized)
-        
-        # Format RGB values for display
-        rgb_values = f"({int(center_normalized[0])}, {int(center_normalized[1])}, {int(center_normalized[2])})"
-        
-        # Add HSV values for more complete information
-        r, g, b = center_normalized / 255.0
-        h, s, v = colorsys.rgb_to_hsv(r, g, b)
-        hsv_values = f"({int(h*360)}°, {int(s*100)}%, {int(v*100)}%)"
-        
-        color_info.append({
-            'Cluster': i+1,
-            'Persentase (%)': round(percentage, 2),
-            'Kategori': color_category,
-            'Nama Warna': color_name,
-            'RGB': rgb_values,
-            'HSV': hsv_values,
-            'Hex': hex_color,
-            'Confidence': round(confidence * 100, 1)
-        })
-    
-    return pd.DataFrame(color_info)
-
-def generate_color_palette(
-    color_info: pd.DataFrame, 
-    palette_size: int = 5, 
-    width: int = 500, 
-    height: int = 100
-) -> np.ndarray:
-    """
-    Generate a visual color palette from color analysis results.
-    
-    Args:
-        color_info (pd.DataFrame): DataFrame with color information.
-        palette_size (int): Maximum number of colors to include in palette.
-        width (int): Width of the palette image.
-        height (int): Height of the palette image.
-        
-    Returns:
-        np.ndarray: Generated color palette image.
-    """
-    # Limit to top colors based on percentage
-    df_sorted = color_info.sort_values(by='Persentase (%)', ascending=False).head(palette_size)
-    
-    # Create a blank palette image
-    palette = np.zeros((height, width, 3), dtype=np.uint8)
-    
-    if len(df_sorted) == 0:
-        return palette
-    
-    # Calculate section width based on percentages
-    total_percentage = df_sorted['Persentase (%)'].sum()
-    x_position = 0
-    
-    for _, row in df_sorted.iterrows():
-        # Calculate width of this color section
-        section_percentage = row['Persentase (%)'] / total_percentage
-        section_width = int(width * section_percentage)
-        
-        # Get RGB values from hex color
-        hex_color = row['Hex']
-        try:
-            # Use to_rgb instead of hex2color for safer conversion
-            r, g, b = [int(255 * c) for c in to_rgb(hex_color)]
-        except ValueError:
-            # Fallback if hex color is invalid
-            r, g, b = 128, 128, 128  # Default to gray
-        
-        # Fill the section with this color
-        if x_position + section_width <= width:
-            palette[:, x_position:x_position+section_width] = [r, g, b]  # RGB for matplotlib
-        else:
-            palette[:, x_position:] = [r, g, b]  # Fill remaining space
-        
-        x_position += section_width
-    
-    return palette
-
-def save_color_segmentation_plot(
-    original_img: np.ndarray, 
-    segmented_img: np.ndarray, 
-    color_info: pd.DataFrame, 
-    cluster_images: List[np.ndarray],
-    max_clusters_to_show: int = 3
-) -> str:
-    """
-    Generate and save color segmentation visualization to a temporary file.
-    """
-    # Create figure with subplots
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    axes = axes.ravel()
-    
-    # Display original image
-    if len(original_img.shape) == 3 and original_img.shape[2] == 3:
-        axes[0].imshow(cv.cvtColor(original_img, cv.COLOR_BGR2RGB))
-    else:
-        axes[0].imshow(original_img, cmap='gray')
-    axes[0].set_title('Citra Asli')
-    axes[0].axis('off')
-    
-    # Display segmented image
-    axes[1].imshow(segmented_img)
-    axes[1].set_title('Citra Tersegmentasi')
-    axes[1].axis('off')
-    
-    # Display color distribution pie chart
-    safe_colors = []
-    percentages = []
-    labels = []
-    
-    for _, row in color_info.iterrows():
-        try:
-            rgb = to_rgb(row['Hex'])
-            safe_colors.append(rgb)
-            percentages.append(row['Persentase (%)'])
-            if len(color_info) > 5:
-                labels.append(f"Cluster {len(labels)+1}\n({row['Persentase (%)']}%)")
-            else:
-                labels.append(f"{row['Nama Warna']}\n({row['Persentase (%)']}%)")
-        except ValueError:
-            continue
-    
-    if safe_colors:
-        axes[2].pie(
-            percentages, 
-            labels=labels, 
-            colors=safe_colors,
-            autopct='%1.1f%%',
-            startangle=90
-        )
-    axes[2].set_title('Distribusi Warna')
-    
-    # Display individual clusters
-    max_display = min(max_clusters_to_show, len(cluster_images))
-    for i in range(max_display):
-        if i < len(color_info):
-            color_name = color_info.iloc[i]['Nama Warna']
-            percentage = color_info.iloc[i]['Persentase (%)']
-            category = color_info.iloc[i]['Kategori']
+        # Classify each dominant color
+        for i, (color, percentage) in enumerate(zip(self.dominant_colors['colors'], 
+                                                  self.dominant_colors['percentages'])):
+            category = self.classify_color_category(color)
             
-            # Create RGB overlay
-            h, w = cluster_images[i].shape
-            mask_rgb = np.zeros((h, w, 3), dtype=np.uint8)
+            if category not in category_data:
+                category_data[category] = []
+                category_percentages[category] = 0
             
-            try:
-                hex_color = color_info.iloc[i]['Hex']
-                r, g, b = [int(255 * c) for c in to_rgb(hex_color)]
-                mask_rgb[cluster_images[i] > 0] = [r, g, b]
-                
-                # Create blend
-                if len(original_img.shape) == 3 and original_img.shape[2] == 3:
-                    original_rgb = cv.cvtColor(original_img, cv.COLOR_BGR2RGB)
-                else:
-                    original_rgb = cv.cvtColor(original_img, cv.COLOR_GRAY2RGB)
-                
-                blend = cv.addWeighted(original_rgb, 0.7, mask_rgb, 0.3, 0)
-                
-                axes[i+3].imshow(blend)
-                axes[i+3].set_title(f'{category}: {color_name}\n({percentage:.1f}%)')
-            except ValueError:
-                axes[i+3].imshow(cluster_images[i], cmap='gray')
-                axes[i+3].set_title(f'Cluster {i+1}')
-            
-            axes[i+3].axis('off')
-    
-    # Turn off any unused subplots
-    for i in range(max_display + 3, 6):
-        axes[i].axis('off')
-    
-    plt.tight_layout()
-    
-    # Save to temporary file
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-    plt.savefig(temp_file.name, bbox_inches='tight', dpi=300)
-    plt.close(fig)
-    
-    return temp_file.name
+            category_data[category].append({
+                'color': color,
+                'percentage': percentage,
+                'hex': '#{:02x}{:02x}{:02x}'.format(int(color[0]), int(color[1]), int(color[2]))
+            })
+            category_percentages[category] += percentage
+        
+        # Sort categories by total percentage
+        sorted_categories = sorted(category_percentages.items(), key=lambda x: x[1], reverse=True)
+        
+        return {
+            'categories': dict(sorted_categories),
+            'detailed_data': category_data
+        }
 
-def save_color_palette_plot(color_info: pd.DataFrame) -> str:
-    """
-    Generate and save a color palette visualization to a temporary file.
-    
-    Args:
-        color_info (pd.DataFrame): DataFrame with color information.
+    def get_rgb_statistics(self):
+        """
+        Calculates RGB statistics for the extracted color palette.
         
-    Returns:
-        str: Path to the saved palette file.
-    """
-    # Create color palette
-    color_palette = generate_color_palette(color_info)
-    
-    # Create visualization
-    fig = plt.figure(figsize=(10, 3))
-    plt.imshow(color_palette)
-    plt.title('Palet Warna Dominan')
-    plt.axis('off')
-    
-    # Save to temporary file
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-    plt.savefig(temp_file.name, bbox_inches='tight')
-    plt.close(fig)
-    
-    return temp_file.name
-
-def save_color_category_plot(color_info: pd.DataFrame) -> str:
-    """
-    Generate and save a color category distribution visualization to a temporary file.
-    
-    Args:
-        color_info (pd.DataFrame): Information about colors from analysis.
+        Returns:
+        pandas.DataFrame: DataFrame containing RGB statistics
+        """
+        if self.rgb_palette is None:
+            raise ValueError("No RGB palette extracted. Call extract_color_palette() first.")
         
-    Returns:
-        str: Path to the saved category plot file.
-    """
-    # Group by color category
-    category_data = color_info.groupby('Kategori')['Persentase (%)'].sum().reset_index()
-    
-    # Ensure all categories are present
-    for category in ['Primer', 'Sekunder', 'Tersier', 'Lainnya']:
-        if category not in category_data['Kategori'].values:
-            category_data = pd.concat([
-                category_data, 
-                pd.DataFrame({'Kategori': [category], 'Persentase (%)': [0]})
-            ])
-    
-    # Sort categories
-    category_order = ['Primer', 'Sekunder', 'Tersier', 'Lainnya']
-    category_data = category_data.set_index('Kategori').reindex(category_order).reset_index()
-    
-    # Set colors for each category
-    category_colors = {
-        'Primer': '#FF5733',     # Red-orange
-        'Sekunder': '#33FF57',   # Green-yellow
-        'Tersier': '#5733FF',    # Purple-blue
-        'Lainnya': '#AAAAAA'     # Gray
-    }
-    
-    # Create safe colors for matplotlib (ensure they're in 0-1 range)
-    colors = []
-    for category in category_data['Kategori']:
-        try:
-            colors.append(to_rgb(category_colors.get(category, '#AAAAAA')))
-        except ValueError:
-            colors.append((0.5, 0.5, 0.5))  # Default to gray if conversion fails
-    
-    # Create visualization
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    
-    # Pie chart
-    wedges, texts, autotexts = ax1.pie(
-        category_data['Persentase (%)'], 
-        labels=category_data['Kategori'], 
-        colors=colors,
-        autopct='%1.1f%%', 
-        startangle=90,
-        explode=[0.05, 0.05, 0.05, 0.05],
-        shadow=True,
-        wedgeprops={'edgecolor': 'w', 'linewidth': 1}
-    )
-    
-    # Enhance text properties
-    for text in texts:
-        text.set_fontsize(11)
-    for autotext in autotexts:
-        autotext.set_fontsize(10)
-        autotext.set_fontweight('bold')
-    
-    ax1.set_title('Distribusi Kategori Warna', fontsize=14, fontweight='bold')
-    
-    # Bar chart
-    bars = ax2.bar(
-        category_data['Kategori'], 
-        category_data['Persentase (%)'], 
-        color=colors,
-        edgecolor='black',
-        linewidth=1,
-        alpha=0.85
-    )
-    
-    # Add value labels on top of bars
-    for i, bar in enumerate(bars):
-        height = bar.get_height()
-        ax2.text(
-            bar.get_x() + bar.get_width()/2., 
-            height + 1,
-            f'{category_data["Persentase (%)"].iloc[i]:.1f}%', 
-            ha='center', 
-            va='bottom',
-            fontweight='bold',
-            fontsize=11
-        )
-    
-    # Enhance appearance
-    ax2.set_title('Persentase per Kategori Warna', fontsize=14, fontweight='bold')
-    ax2.set_ylabel('Persentase (%)', fontsize=12)
-    ax2.set_ylim(0, max(100, category_data['Persentase (%)'].max() * 1.2))
-    ax2.grid(axis='y', linestyle='--', alpha=0.7)
-    ax2.spines['top'].set_visible(False)
-    ax2.spines['right'].set_visible(False)
-    
-    # Add color theory legend
-    fig.text(0.5, 0, """
-    Keterangan:
-    • Primer: Warna dasar (Merah, Hijau, Biru)
-    • Sekunder: Campuran 2 warna primer (Kuning, Magenta, Cyan)
-    • Tersier: Campuran warna primer dan sekunder
-    • Lainnya: Warna netral atau campuran kompleks
-    """, ha='center', fontsize=10, bbox=dict(facecolor='#f9f9f9', edgecolor='#ddd', boxstyle='round,pad=1'))
-    
-    plt.tight_layout(rect=[0, 0.1, 1, 0.95])
-    
-    # Save to temporary file
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-    plt.savefig(temp_file.name, bbox_inches='tight')
-    plt.close(fig)
-    
-    return temp_file.name
-
-def calculate_color_features(image: np.ndarray) -> Dict[str, float]:
-    """
-    Calculate various color features from the image.
-    
-    Args:
-        image (np.ndarray): Input image in BGR format (OpenCV default).
+        # Get original image as RGB array
+        if hasattr(self.image, 'convert'):
+            img_array = np.array(self.image.convert('RGB'))
+        elif hasattr(self.image, 'shape'):
+            img_array = self.image
+        else:
+            img_array = np.array(self.image)
         
-    Returns:
-        Dict[str, float]: Dictionary of calculated color features.
-    """
-    # Ensure image is in RGB format
-    if len(image.shape) == 2:  # If grayscale, convert to RGB
-        image_rgb = cv.cvtColor(image, cv.COLOR_GRAY2RGB)
-    else:
-        image_rgb = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-    
-    # Calculate basic color statistics
-    mean_rgb = np.mean(image_rgb, axis=(0, 1))
-    std_rgb = np.std(image_rgb, axis=(0, 1))
-    
-    # Split channels
-    r, g, b = cv.split(image_rgb)
-    
-    # Calculate brightness (average luminance)
-    brightness = np.mean(0.299 * r + 0.587 * g + 0.114 * b)
-    
-    # Calculate contrast
-    grayscale = cv.cvtColor(image_rgb, cv.COLOR_RGB2GRAY)
-    contrast = np.std(grayscale)
-    
-    # Calculate colorfulness using Hasler and Süsstrunk's method
-    rg = r.astype(np.float32) - g.astype(np.float32)
-    yb = 0.5 * (r.astype(np.float32) + g.astype(np.float32)) - b.astype(np.float32)
-    rg_std = np.std(rg)
-    rg_mean = np.mean(np.abs(rg))
-    yb_std = np.std(yb)
-    yb_mean = np.mean(np.abs(yb))
-    colorfulness = np.sqrt(rg_std**2 + yb_std**2) + 0.3 * np.sqrt(rg_mean**2 + yb_mean**2)
-    
-    # Calculate color diversity (normalized unique colors)
-    pixels = image_rgb.reshape(-1, 3)
-    # Sample pixels for performance
-    sample_size = min(100000, pixels.shape[0])
-    sampled_pixels = pixels[np.random.choice(pixels.shape[0], sample_size, replace=False)]
-    # Round values to reduce sensitivity to minor variations
-    rounded_pixels = np.round(sampled_pixels / 8) * 8
-    unique_colors = np.unique(rounded_pixels, axis=0)
-    color_diversity = len(unique_colors) / sample_size
-    
-    # Calculate color balance (normalized difference between channels)
-    r_mean, g_mean, b_mean = mean_rgb
-    max_channel = max(r_mean, g_mean, b_mean)
-    min_channel = min(r_mean, g_mean, b_mean)
-    if max_channel > 0:
-        color_balance = 1.0 - ((max_channel - min_channel) / max_channel)
-    else:
-        color_balance = 1.0
-    
-    # Return all features in a dictionary
-    return {
-        'brightness': brightness,
-        'contrast': contrast,
-        'colorfulness': colorfulness,
-        'color_diversity': color_diversity,
-        'color_balance': color_balance,
-        'mean_red': mean_rgb[0],
-        'mean_green': mean_rgb[1],
-        'mean_blue': mean_rgb[2],
-        'std_red': std_rgb[0],
-        'std_green': std_rgb[1],
-        'std_blue': std_rgb[2]
-    }
-
-def process_color_segmentation(
-    image_path: str,
-    n_clusters: int = None, 
-    auto_determine: bool = True,
-    max_clusters: int = 8, 
-    min_percentage: float = 1.0
-) -> Tuple[Dict[str, any], List[str]]:
-    """
-    Process an image for color segmentation analysis.
-    This function performs color segmentation, analysis, and generates visualizations.
-    
-    Args:
-        image_path (str): Path to the image file.
-        n_clusters (int, optional): Number of color clusters to use.
-        auto_determine (bool): Whether to automatically determine optimal clusters.
-        max_clusters (int): Maximum number of clusters to consider.
-        min_percentage (float): Minimum percentage to include in results.
+        # Calculate statistics for the entire image
+        img_flat = img_array.reshape(-1, 3)
         
-    Returns:
-        Tuple[Dict[str, any], List[str]]: Dictionary with analysis results and list of temporary file paths.
-    """
-    try:
-        # Load image
-        original_img = cv.imread(image_path)
-        if original_img is None:
-            raise ValueError(f"Could not load image from {image_path}")
-        
-        # Perform segmentation directly on the original image
-        # without preprocessing for more accurate original color representation
-        segmented_img, label_img, centers, cluster_images = segment_colors(
-            original_img,
-            n_clusters=n_clusters,
-            auto_determine=auto_determine,
-            max_clusters=max_clusters,
-            use_preprocessing=False  # Use original image without preprocessing
-        )
-        
-        # Analyze color dominance
-        color_info = analyze_color_dominance(
-            original_img,
-            centers,
-            label_img,
-            min_percentage=min_percentage
-        )
-        
-        # Calculate additional color features
-        color_features = calculate_color_features(original_img)
-        
-        # Generate and save visualizations
-        temp_files = []
-        
-        # Save color segmentation plot
-        segmentation_plot_path = save_color_segmentation_plot(
-            original_img, 
-            segmented_img, 
-            color_info, 
-            cluster_images
-        )
-        temp_files.append(segmentation_plot_path)
-        
-        # Save color palette plot
-        palette_plot_path = save_color_palette_plot(color_info)
-        temp_files.append(palette_plot_path)
-        
-        # Save category distribution plot
-        category_plot_path = save_color_category_plot(color_info)
-        temp_files.append(category_plot_path)
-        
-        # Prepare and return results
-        results = {
-            'color_info': color_info,
-            'color_features': color_features,
-            'centers': centers,
-            'label_img': label_img
+        # Calculate overall image statistics
+        overall_stats = {
+            'Metrik': ['Mean', 'Median', 'Std Dev', 'Min', 'Max', 'Range'],
+            'Red': [
+                np.mean(img_flat[:, 0]),
+                np.median(img_flat[:, 0]),
+                np.std(img_flat[:, 0]),
+                np.min(img_flat[:, 0]),
+                np.max(img_flat[:, 0]),
+                np.max(img_flat[:, 0]) - np.min(img_flat[:, 0])
+            ],
+            'Green': [
+                np.mean(img_flat[:, 1]),
+                np.median(img_flat[:, 1]),
+                np.std(img_flat[:, 1]),
+                np.min(img_flat[:, 1]),
+                np.max(img_flat[:, 1]),
+                np.max(img_flat[:, 1]) - np.min(img_flat[:, 1])
+            ],
+            'Blue': [
+                np.mean(img_flat[:, 2]),
+                np.median(img_flat[:, 2]),
+                np.std(img_flat[:, 2]),
+                np.min(img_flat[:, 2]),
+                np.max(img_flat[:, 2]),
+                np.max(img_flat[:, 2]) - np.min(img_flat[:, 2])
+            ]
         }
         
-        return results, temp_files
-    
-    except Exception as e:
-        # Clean up any temp files in case of error
-        if 'temp_files' in locals():
-            for file_path in temp_files:
-                if os.path.exists(file_path):
-                    try:
-                        os.unlink(file_path)
-                    except:
-                        pass
+        # Round values to 2 decimal places
+        for key in ['Red', 'Green', 'Blue']:
+            overall_stats[key] = [round(val, 2) for val in overall_stats[key]]
         
-        # Re-raise the error
-        raise Exception(f"Error in color segmentation: {str(e)}")
+        overall_df = pd.DataFrame(overall_stats)
+        
+        # Calculate statistics for each color in the palette
+        palette_stats = []
+        hex_codes = self.get_hex_palette()
+        
+        for i, (color, percentage) in enumerate(zip(self.rgb_palette, self.color_percentages)):
+            r, g, b = color
+            palette_stats.append({
+                'Warna': f'Warna {i+1}',
+                'Hex': hex_codes[i],
+                'R': int(r),
+                'G': int(g),
+                'B': int(b),
+                'Persentase (%)': round(percentage, 2),
+                'Brightness': round((0.299*r + 0.587*g + 0.114*b), 2),  # Perceived brightness
+                'Kategori': self.classify_color_category(color)
+            })
+        
+        palette_df = pd.DataFrame(palette_stats)
+        
+        return overall_df, palette_df
 
-def main():
-    """
-    Example usage of the color segmentation module.
-    """
-    # Example path to an image
-    image_path = input("Enter path to image file: ")
-    
-    # Handle default path
-    if not image_path.strip():
-        image_path = "sample_image.jpg"
-        print(f"Using default image: {image_path}")
-    
-    try:
-        # Perform segmentation and get results
-        results, temp_files = process_color_segmentation(
-            image_path,
-            auto_determine=True,
-            max_clusters=8,
-            min_percentage=1.0
+    def visualize_color_category_distribution(self):
+        """
+        Creates visualizations for color category distribution (pie chart and bar chart).
+        
+        Returns:
+        tuple: (pie_fig, bar_fig) - Matplotlib figure objects
+        """
+        category_dist = self.get_color_category_distribution()
+        categories = list(category_dist['categories'].keys())
+        percentages = list(category_dist['categories'].values())
+        
+        # Define colors for each category
+        category_colors = {
+            'Primer (Merah)': '#FF0000',
+            'Primer (Biru)': '#0000FF', 
+            'Primer (Kuning)': '#FFFF00',
+            'Primer (Hijau)': '#00FF00',
+            'Sekunder (Oranye)': '#FFA500',
+            'Sekunder (Ungu)': '#800080',
+            'Sekunder (Cyan)': '#00FFFF',
+            'Tersier (Kuning-Hijau)': '#ADFF2F',
+            'Lainnya (Hitam/Gelap)': '#2F2F2F',
+            'Lainnya (Putih/Terang)': '#F5F5F5',
+            'Lainnya (Abu-abu)': '#808080',
+            'Lainnya': '#D3D3D3'
+        }
+        
+        colors_for_plot = [category_colors.get(cat, '#D3D3D3') for cat in categories]
+        
+        # Create pie chart
+        pie_fig, pie_ax = plt.subplots(1, 1, figsize=(10, 8))
+        
+        wedges, texts, autotexts = pie_ax.pie(
+            percentages,
+            labels=categories,
+            colors=colors_for_plot,
+            autopct='%1.1f%%',
+            startangle=90,
+            textprops={'fontsize': 9}
         )
         
-        # Print color analysis results
-        print("\n=== HASIL ANALISIS WARNA ===")
-        print(results['color_info'].to_string(index=False))
+        # Improve text appearance
+        for autotext in autotexts:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
         
-        # Print color feature results
-        print("\n=== FITUR WARNA ===")
-        for feature, value in results['color_features'].items():
-            print(f"{feature}: {value:.2f}")
+        pie_ax.set_title('Distribusi Kategori Warna', fontsize=14, fontweight='bold', pad=20)
+        plt.tight_layout()
         
-        print(f"\nVisualisasi telah disimpan ke: {', '.join(temp_files)}")
+        # Create bar chart
+        bar_fig, bar_ax = plt.subplots(1, 1, figsize=(12, 6))
         
-        # Cleanup temp files
-        for file_path in temp_files:
-            try:
-                os.unlink(file_path)
-            except:
-                pass
-    
-    except Exception as e:
-        print(f"Error: {str(e)}")
+        bars = bar_ax.bar(range(len(categories)), percentages, color=colors_for_plot)
+        
+        # Add percentage labels on bars
+        for i, (bar, percentage) in enumerate(zip(bars, percentages)):
+            height = bar.get_height()
+            bar_ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
+                       f'{percentage:.1f}%', ha='center', va='bottom', fontweight='bold')
+        
+        bar_ax.set_xlabel('Kategori Warna', fontweight='bold')
+        bar_ax.set_ylabel('Persentase (%)', fontweight='bold')
+        bar_ax.set_title('Distribusi Persentase Kategori Warna', fontsize=14, fontweight='bold')
+        bar_ax.set_xticks(range(len(categories)))
+        bar_ax.set_xticklabels(categories, rotation=45, ha='right')
+        bar_ax.set_ylim(0, max(percentages) * 1.1)
+        
+        # Add grid for better readability
+        bar_ax.grid(axis='y', alpha=0.3)
+        
+        plt.tight_layout()
+        
+        return pie_fig, bar_fig
 
-if __name__ == "__main__":
-    main()
+    def get_hex_palette(self):
+        """
+        Converts the RGB palette to hexadecimal color codes.
+        
+        Returns:
+        hex_codes: A list of hexadecimal color codes
+        """
+        if self.rgb_palette is None:
+            raise ValueError("No RGB palette extracted. Call extract_color_palette() first.")
+        
+        hex_codes = []
+        for rgb in self.rgb_palette:
+            hex_code = '#{:02x}{:02x}{:02x}'.format(int(rgb[0]), int(rgb[1]), int(rgb[2]))
+            hex_codes.append(hex_code)
+        return hex_codes
+
+    def get_dominant_hex_palette(self):
+        """
+        Converts the dominant colors to hexadecimal color codes.
+        
+        Returns:
+        hex_codes: A list of hexadecimal color codes sorted by dominance
+        """
+        if self.dominant_colors is None:
+            raise ValueError("No dominant colors extracted. Call extract_color_palette() first.")
+        
+        hex_codes = []
+        for rgb in self.dominant_colors['colors']:
+            hex_code = '#{:02x}{:02x}{:02x}'.format(int(rgb[0]), int(rgb[1]), int(rgb[2]))
+            hex_codes.append(hex_code)
+        return hex_codes
+
+    def visualize_palette(self):
+        """
+        Creates a visualization of the extracted color palette.
+        
+        Returns:
+        fig: Matplotlib figure object
+        """
+        if self.rgb_palette is None:
+            raise ValueError("No RGB palette extracted. Call extract_color_palette() first.")
+        
+        fig, ax = plt.subplots(1, 1, figsize=(12, 2))
+        
+        # Create color bars
+        palette_normalized = self.rgb_palette / 255.0
+        colors = [palette_normalized[i] for i in range(len(palette_normalized))]
+        
+        # Create rectangles for each color
+        for i, color in enumerate(colors):
+            rect = plt.Rectangle((i, 0), 1, 1, facecolor=color)
+            ax.add_patch(rect)
+        
+        ax.set_xlim(0, len(colors))
+        ax.set_ylim(0, 1)
+        ax.set_xticks(np.arange(len(colors)) + 0.5)
+        ax.set_xticklabels([f'Warna {i+1}' for i in range(len(colors))])
+        ax.set_yticks([])
+        ax.set_title('Palet Warna Citra yang Diambil')
+        
+        plt.tight_layout()
+        return fig
+
+    def visualize_dominant_palette(self):
+        """
+        Creates a visualization of the dominant color palette sorted by percentage.
+        
+        Returns:
+        fig: Matplotlib figure object
+        """
+        if self.dominant_colors is None:
+            raise ValueError("No dominant colors extracted. Call extract_color_palette() first.")
+        
+        fig, ax = plt.subplots(1, 1, figsize=(12, 3))
+        
+        # Create color bars with dominant colors
+        dominant_colors_normalized = np.array(self.dominant_colors['colors']) / 255.0
+        colors = [dominant_colors_normalized[i] for i in range(len(dominant_colors_normalized))]
+        percentages = self.dominant_colors['percentages']
+        
+        # Create rectangles for each color with width proportional to percentage
+        x_pos = 0
+        total_width = 10
+        
+        for i, (color, percentage) in enumerate(zip(colors, percentages)):
+            width = (percentage / 100) * total_width
+            rect = plt.Rectangle((x_pos, 0), width, 1, facecolor=color, edgecolor='white', linewidth=1)
+            ax.add_patch(rect)
+            
+            # Add percentage label
+            if width > 0.5:  # Only show label if segment is wide enough
+                ax.text(x_pos + width/2, 0.5, f'{percentage:.1f}%', 
+                       ha='center', va='center', fontweight='bold', 
+                       color='white' if np.mean(color) < 0.5 else 'black')
+            
+            x_pos += width
+        
+        ax.set_xlim(0, total_width)
+        ax.set_ylim(0, 1)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title('Palet Warna Dominan (Diurutkan berdasarkan Persentase)', fontweight='bold')
+        
+        plt.tight_layout()
+        return fig
+
+    def visualize_color_distribution(self):
+        """
+        Creates a pie chart showing the distribution of colors in the image.
+        
+        Returns:
+        fig: Matplotlib figure object
+        """
+        if self.rgb_palette is None or self.color_percentages is None:
+            raise ValueError("No color palette or percentages extracted. Call extract_color_palette() first.")
+        
+        fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+        
+        # Normalize RGB values for matplotlib colors
+        palette_normalized = self.rgb_palette / 255.0
+        colors = [palette_normalized[i] for i in range(len(palette_normalized))]
+        
+        # Create labels with percentages
+        labels = [f'Warna {i+1}\n({self.color_percentages[i]:.1f}%)' 
+                 for i in range(len(self.color_percentages))]
+        
+        # Create pie chart
+        wedges, texts, autotexts = ax.pie(
+            self.color_percentages, 
+            labels=labels,
+            colors=colors,
+            autopct='%1.1f%%',
+            startangle=90,
+            textprops={'fontsize': 10}
+        )
+        
+        # Improve text appearance
+        for autotext in autotexts:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
+        
+        ax.set_title('Distribusi Warna dalam Citra', fontsize=14, fontweight='bold', pad=20)
+        
+        plt.tight_layout()
+        return fig
+
+    def get_dominant_color_info(self, top_n=3):
+        """
+        Returns information about the top N dominant colors.
+        
+        Args:
+        top_n: Number of top dominant colors to return
+        
+        Returns:
+        dict: Information about dominant colors
+        """
+        if self.dominant_colors is None:
+            raise ValueError("No dominant colors extracted. Call extract_color_palette() first.")
+        
+        top_colors = []
+        hex_codes = self.get_dominant_hex_palette()
+        
+        for i in range(min(top_n, len(self.dominant_colors['colors']))):
+            color_info = {
+                'rank': i + 1,
+                'rgb': self.dominant_colors['colors'][i].tolist(),
+                'hex': hex_codes[i],
+                'percentage': self.dominant_colors['percentages'][i]
+            }
+            top_colors.append(color_info)
+        
+        return top_colors
+
+    def segment_image(self):
+        """
+        Segments the image based on the extracted color palette.
+        
+        Returns:
+        segmented_image: Image with pixels replaced by nearest palette colors
+        """
+        if self.palette is None:
+            raise ValueError("No palette extracted. Call extract_color_palette() first.")
+        
+        if self.processed_pixels is None:
+            self.preprocess_image()
+        
+        # Get cluster labels for each pixel
+        if self.cluster_labels is None:
+            labels = self.kmeans.predict(self.processed_pixels)
+        else:
+            labels = self.cluster_labels
+        
+        # Create segmented image in LAB space
+        segmented_lab = self.palette[labels]
+        
+        # Reshape back to original image dimensions
+        if hasattr(self.image, 'shape'):
+            original_shape = self.image.shape
+        elif hasattr(self.image, 'size'):
+            # For PIL images
+            original_shape = (self.image.size[1], self.image.size[0], 3)
+        else:
+            original_shape = np.array(self.image).shape
+            
+        segmented_lab = segmented_lab.reshape(original_shape)
+        
+        # Convert back to RGB
+        segmented_rgb = cv.cvtColor(np.uint8(segmented_lab), cv.COLOR_LAB2RGB)
+        
+        return segmented_rgb
+
+    def export_palette_data(self, format='csv'):
+        """
+        Exports palette data in CSV format.
+        
+        Args:
+        format: Export format (only 'csv' is supported)
+        
+        Returns:
+        data: Formatted palette data as CSV string
+        """
+        if self.rgb_palette is None:
+            raise ValueError("No RGB palette extracted. Call extract_color_palette() first.")
+        
+        if format != 'csv':
+            raise ValueError("Only CSV format is supported.")
+        
+        hex_codes = self.get_hex_palette()
+        
+        import io
+        output = io.StringIO()
+        
+        if self.color_percentages is not None:
+            output.write('Color_ID,R,G,B,Hex,Percentage,Dominance_Rank\n')
+            for i, (rgb, hex_code, percentage) in enumerate(zip(self.rgb_palette, hex_codes, self.color_percentages)):
+                # Find dominance rank
+                dominance_rank = 'N/A'
+                if self.dominant_colors is not None:
+                    for j, orig_idx in enumerate(self.dominant_colors['original_indices']):
+                        if orig_idx == i:
+                            dominance_rank = j + 1
+                            break
+                output.write(f'{i+1},{rgb[0]},{rgb[1]},{rgb[2]},{hex_code},{percentage:.2f}%,{dominance_rank}\n')
+        else:
+            output.write('Color_ID,R,G,B,Hex\n')
+            for i, (rgb, hex_code) in enumerate(zip(self.rgb_palette, hex_codes)):
+                output.write(f'{i+1},{rgb[0]},{rgb[1]},{rgb[2]},{hex_code}\n')
+        
+        return output.getvalue()
+
+def create_color_segmentation_ui(uploaded_image):
+    """
+    Creates Streamlit UI for color segmentation functionality.
+    
+    Args:
+    uploaded_image: Uploaded image file from Streamlit
+    """
+    if uploaded_image is not None:
+        try:
+            # Convert uploaded file to PIL Image
+            image = Image.open(uploaded_image)
+            
+            # Select number of colors
+            num_colors = st.slider(
+                "Pilih jumlah warna dalam palet citra (4-15):", 
+                min_value=4, 
+                max_value=15, 
+                value=7, 
+                step=1
+            )
+            st.write(f"Palet warna citra Anda saat ini memiliki {num_colors} warna")
+            
+            with st.spinner("Processing color segmentation..."):
+                # Create processor instance
+                processor = ColorSegmentationProcessor(image, num_colors)
+                
+                # Extract color palette
+                rgb_palette = processor.extract_color_palette()
+                
+                # Create two columns for display
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Title for original image
+                    st.subheader("Citra Asli")
+                    # Display original image
+                    st.image(image, use_container_width=True)
+                
+                with col2:
+                    # Title for segmented image
+                    st.subheader("Citra Tersegmentasi")
+                    # Display segmented image
+                    segmented_img = processor.segment_image()
+                    st.image(segmented_img, use_container_width=True)
+                
+                # Visualize color palette
+                st.subheader("Palet Warna Citra")
+                palette_fig = processor.visualize_palette()
+                st.pyplot(fig=palette_fig, use_container_width=True)
+                
+                # Visualize dominant color palette
+                st.subheader("Palet Warna Dominan")
+                dominant_palette_fig = processor.visualize_dominant_palette()
+                st.pyplot(fig=dominant_palette_fig, use_container_width=True)
+                
+                # Display dominant color information
+                st.subheader("Informasi Warna Dominan")
+                dominant_info = processor.get_dominant_color_info(top_n=5)
+                
+                # Create columns for dominant colors
+                cols = st.columns(min(5, len(dominant_info)))
+                for i, color_info in enumerate(dominant_info):
+                    with cols[i]:
+                        st.markdown(f"""
+                        <div style="text-align: center;">
+                            <div style="background-color: {color_info['hex']}; 
+                                       width: 80px; height: 80px; 
+                                       margin: 0 auto; 
+                                       border-radius: 50%; 
+                                       border: 2px solid #ddd;"></div>
+                            <p><strong>#{i+1}</strong></p>
+                            <p>{color_info['hex']}</p>
+                            <p>{color_info['percentage']:.1f}%</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                # Create two columns for distribution charts
+                dist_col1, dist_col2 = st.columns(2)
+                
+                with dist_col1:
+                    # Add pie chart for color distribution
+                    st.subheader("Distribusi Warna")
+                    distribution_fig = processor.visualize_color_distribution()
+                    st.pyplot(fig=distribution_fig, use_container_width=True)
+                
+                with dist_col2:
+                    # Add pie chart for color category distribution
+                    st.subheader("Distribusi Kategori Warna")
+                    category_pie_fig, category_bar_fig = processor.visualize_color_category_distribution()
+                    st.pyplot(fig=category_pie_fig, use_container_width=True)
+                
+                # Add bar chart for color category percentages
+                st.subheader("Persentase Kategori Warna")
+                st.pyplot(fig=category_bar_fig, use_container_width=True)
+                
+                # Add RGB Statistics Tables
+                st.subheader("Statistik Fitur Warna RGB")
+                
+                # Get RGB statistics
+                overall_stats_df, palette_stats_df = processor.get_rgb_statistics()
+                
+                # Create two columns for the statistics tables
+                stats_col1, stats_col2 = st.columns(2)
+                
+                with stats_col1:
+                    st.write("**Statistik RGB Keseluruhan Citra:**")
+                    st.dataframe(overall_stats_df, use_container_width=True)
+                
+                with stats_col2:
+                    st.write("**Statistik RGB Palet Warna:**")
+                    # Add color preview column to the dataframe display
+                    st.dataframe(palette_stats_df, use_container_width=True)
+                
+                # Display detailed category information
+                st.subheader("Detail Kategori Warna")
+                category_dist = processor.get_color_category_distribution()
+                
+                for category, percentage in category_dist['categories'].items():
+                    with st.expander(f"{category} ({percentage:.1f}%)"):
+                        colors_in_category = category_dist['detailed_data'][category]
+                        
+                        # Create columns for colors in this category
+                        if colors_in_category:
+                            color_cols = st.columns(min(len(colors_in_category), 5))
+                            for i, color_data in enumerate(colors_in_category):
+                                if i < len(color_cols):
+                                    with color_cols[i]:
+                                        st.markdown(f"""
+                                        <div style="text-align: center;">
+                                            <div style="background-color: {color_data['hex']}; 
+                                                       width: 60px; height: 60px; 
+                                                       margin: 0 auto; 
+                                                       border-radius: 50%; 
+                                                       border: 2px solid #ddd;"></div>
+                                            <p><small>{color_data['hex']}</small></p>
+                                            <p><small>{color_data['percentage']:.1f}%</small></p>
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                
+                # Export options (CSV only)
+                st.subheader("Export Data")
+                
+                # Create columns for different export options
+                export_col1, export_col2 = st.columns(2)
+                
+                with export_col1:
+                    palette_csv = processor.export_palette_data('csv')
+                    st.download_button(
+                        label="Export Palet Warna (CSV)",
+                        data=palette_csv,
+                        file_name="color_palette.csv",
+                        icon=":material/download:",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                
+                with export_col2:
+                    # Export RGB statistics
+                    stats_csv = palette_stats_df.to_csv(index=False)
+                    st.download_button(
+                        label="Export Statistik RGB (CSV)",
+                        data=stats_csv,
+                        file_name="rgb_statistics.csv",
+                        icon=":material/download:",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    
+        except Exception as e:
+            st.error(f"Error processing image: {str(e)}")
+            st.error("Please make sure you uploaded a valid image file (JPG, JPEG, or PNG)")
