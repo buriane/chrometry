@@ -15,6 +15,8 @@ from contour import (
     analisis_properti_geometri
 )
 from color_segmentation import ColorSegmentationProcessor, create_color_segmentation_ui
+from pdf_generator import PDFReportGenerator  # Import PDF generator
+from PIL import Image
 
 try:
     import plotly.graph_objects as go
@@ -59,7 +61,8 @@ def analisis_properti_geometri(kontur: np.ndarray) -> Dict:
             'extent': extent,
             'aspect_ratio': aspect_ratio,
             'width': w,
-            'height': h
+            'height': h,
+            'contour_points': kontur  # Tambahkan untuk PDF
         }
     except Exception as e:
         print(f"Error in analisis_properti_geometri: {str(e)}")
@@ -73,7 +76,8 @@ def analisis_properti_geometri(kontur: np.ndarray) -> Dict:
             'extent': 0,
             'aspect_ratio': 1.0,
             'width': 0,
-            'height': 0
+            'height': 0,
+            'contour_points': np.array([])
         }
 
 def save_plot_to_file(
@@ -158,11 +162,153 @@ def save_plot_to_file(
         plt.close()  # Make sure to close in case of error
         raise e
 
+def enhanced_color_segmentation_ui(uploaded_image):
+    """
+    Enhanced color segmentation UI that returns data for PDF generation.
+    """
+    color_results = {}
+    
+    if uploaded_image is not None:
+        try:
+            # Convert uploaded file to PIL Image
+            image = Image.open(uploaded_image)
+            
+            # Store original image for PDF
+            color_results['original_image'] = np.array(image.convert('RGB'))
+            
+            # Select number of colors
+            num_colors = st.slider(
+                "Pilih jumlah warna dalam palet citra (4-15):", 
+                min_value=4, 
+                max_value=15, 
+                value=7, 
+                step=1
+            )
+            st.write(f"Palet warna citra Anda saat ini memiliki {num_colors} warna")
+            
+            color_results['num_colors'] = num_colors
+            
+            with st.spinner("Processing color segmentation..."):
+                processor = ColorSegmentationProcessor(image, num_colors)
+                rgb_palette = processor.extract_color_palette()
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("Citra Asli")
+                    st.image(image, use_column_width=True)
+                
+                with col2:
+                    st.subheader("Citra Tersegmentasi")
+                    segmented_img = processor.segment_image()
+                    color_results['segmented_image'] = segmented_img
+                    st.image(segmented_img, use_column_width=True)
+                
+                # Get dominant colors info for PDF
+                dominant_info = processor.get_dominant_color_info(top_n=min(10, num_colors))
+                color_results['dominant_colors'] = dominant_info
+                
+                # Get category distribution
+                try:
+                    category_dist = processor.get_color_category_distribution()
+                    color_results['category_distribution'] = category_dist
+                    
+                    # Add category info to dominant colors
+                    for i, color_info in enumerate(color_results['dominant_colors']):
+                        rgb = color_info['rgb']
+                        category = processor.classify_color_category(np.array(rgb))
+                        color_results['dominant_colors'][i]['category'] = category
+                        
+                except Exception as e:
+                    st.warning(f"Category analysis error: {str(e)}")
+                
+                # Get RGB statistics
+                try:
+                    overall_stats_df, palette_stats_df = processor.get_rgb_statistics()
+                    color_results['rgb_statistics'] = {
+                        'overall': overall_stats_df.to_dict(),
+                        'palette': palette_stats_df.to_dict()
+                    }
+                except Exception as e:
+                    st.warning(f"Statistics analysis error: {str(e)}")
+                
+                # Visualizations
+                st.subheader("Palet Warna Citra")
+                palette_fig = processor.visualize_palette()
+                st.pyplot(palette_fig)
+                
+                st.subheader("Palet Warna Dominan")
+                dominant_palette_fig = processor.visualize_dominant_palette()
+                st.pyplot(dominant_palette_fig)
+                
+                # Distribution visualizations
+                dist_col1, dist_col2 = st.columns(2)
+                
+                with dist_col1:
+                    st.subheader("Distribusi Warna")
+                    distribution_fig = processor.visualize_color_distribution()
+                    st.pyplot(distribution_fig)
+                
+                with dist_col2:
+                    st.subheader("Distribusi Kategori Warna")
+                    if 'category_distribution' in color_results:
+                        category_pie_fig, category_bar_fig = processor.visualize_color_category_distribution()
+                        st.pyplot(category_pie_fig)
+                
+                if 'category_distribution' in color_results:
+                    st.subheader("Persentase Kategori Warna")
+                    st.pyplot(category_bar_fig)
+                
+                # Statistics tables
+                if 'rgb_statistics' in color_results:
+                    overall_stats_df, palette_stats_df = processor.get_rgb_statistics()
+                    
+                    stats_col1, stats_col2 = st.columns(2)
+                    with stats_col1:
+                        st.write("**Statistik RGB Keseluruhan Citra:**")
+                        st.dataframe(overall_stats_df)
+                    
+                    with stats_col2:
+                        st.write("**Statistik RGB Palet Warna:**")
+                        st.dataframe(palette_stats_df)
+                
+                # Export buttons
+                export_col1, export_col2 = st.columns(2)
+                
+                with export_col1:
+                    palette_csv = processor.export_palette_data('csv')
+                    st.download_button(
+                        label="Export Palet Warna (CSV)",
+                        data=palette_csv,
+                        file_name="color_palette.csv",
+                        mime="text/csv"
+                    )
+                
+                with export_col2:
+                    if 'rgb_statistics' in color_results:
+                        stats_csv = palette_stats_df.to_csv(index=False)
+                        st.download_button(
+                            label="Export Statistik RGB (CSV)",
+                            data=stats_csv,
+                            file_name="rgb_statistics.csv",
+                            mime="text/csv"
+                        )
+                    
+        except Exception as e:
+            st.error(f"Error processing image: {str(e)}")
+            st.error("Please make sure you uploaded a valid image file (JPG, JPEG, or PNG)")
+    
+    return color_results
+
 def main():
     st.set_page_config(page_title="Aplikasi Web Pengolahan Citra", layout="wide")
     
     st.title("Aplikasi Pengolahan Citra Digital")
     st.write("Unggah citra untuk analisis deteksi kontur dan segmentasi warna.")
+    
+    # Initialize PDF generator in session state
+    if 'pdf_generator' not in st.session_state:
+        st.session_state.pdf_generator = PDFReportGenerator()
     
     # Penjelasan umum aplikasi
     with st.expander("Tentang Aplikasi", expanded=False):
@@ -179,7 +325,13 @@ def main():
         - Ekstraksi palet warna dominan dari citra
         - Segmentasi citra berdasarkan warna dominan menggunakan K-means clustering
         - Visualisasi palet warna yang diekstrak
+        - Analisis kategori warna dan statistik RGB
         - Export data palet dalam format CSV
+        
+        **3. Laporan PDF Otomatis:**
+        - Setelah analisis selesai, laporan PDF akan otomatis dibuat
+        - Laporan berisi semua hasil analisis dan visualisasi geometri dan warna
+        - Download otomatis tersedia di akhir proses
         
         Unggah satu citra untuk mendapatkan analisis lengkap dari kedua fitur tersebut.
         """)
@@ -223,6 +375,9 @@ def main():
     )
     
     if uploaded_file is not None:
+        # Variables to store analysis results for PDF generation
+        analysis_results = {}
+        
         # ===== DETEKSI KONTUR DAN ANALISIS BENTUK =====
         st.header("🔍 Deteksi Kontur dan Analisis Bentuk")
         
@@ -281,6 +436,15 @@ def main():
                         kontur = kontur_terbaik
                         citra_threshold = citra_threshold_terbaik
                         mode_adaptif, nilai_threshold, ukuran_kernel, invert_threshold = parameter_terbaik
+                        
+                        # Store data for PDF
+                        analysis_results['citra_asli'] = citra_asli
+                        analysis_results['citra_threshold'] = citra_threshold
+                        analysis_results['citra_diubah_ukuran'] = citra_diubah_ukuran
+                        analysis_results['kontur'] = kontur
+                        analysis_results['parameter_terbaik'] = parameter_terbaik
+                        analysis_results['faktor_skala'] = faktor_skala
+                        
                         st.info(f"Parameter terbaik: Mode {'Adaptif' if mode_adaptif else 'Global'}, Threshold: {nilai_threshold}, Kernel: {ukuran_kernel}x{ukuran_kernel}, Inversi: {'Ya' if invert_threshold else 'Tidak'}")
                 
                 # Analisis Bentuk dan Kontur
@@ -293,6 +457,12 @@ def main():
                     # Use the imported deteksi_bentuk_geometri (returns 3 values)
                     shape_2d, confidence, shape_3d = deteksi_bentuk_geometri(kontur[0])
                     properties = analisis_properti_geometri(kontur[0])
+
+                    # Store shape analysis results
+                    analysis_results['shape_2d'] = shape_2d
+                    analysis_results['shape_3d'] = shape_3d
+                    analysis_results['confidence'] = confidence
+                    analysis_results['properties'] = properties
 
                     # Display metrics
                     col1.metric("Bentuk 2D Terdeteksi", shape_2d)
@@ -308,6 +478,10 @@ def main():
                         citra_base = citra_diubah_ukuran.copy()
                         citra_proses_rgb = cv.cvtColor(citra_diubah_ukuran, cv.COLOR_GRAY2RGB)
                         cv.drawContours(citra_proses_rgb, kontur, -1, (0, 255, 0), 3)
+                        
+                        # Store processed images for PDF
+                        analysis_results['citra_base'] = citra_base
+                        analysis_results['citra_proses_rgb'] = citra_proses_rgb
                         
                         with col1:
                             # First save the plot
@@ -383,8 +557,69 @@ def main():
             # Reset file pointer untuk segmentasi warna
             uploaded_file.seek(0)
             
-            # Gunakan fungsi UI dari color_segmentation.py
-            create_color_segmentation_ui(uploaded_file)
+            # Gunakan fungsi UI yang sudah diupdate untuk color segmentation
+            color_results = enhanced_color_segmentation_ui(uploaded_file)
+            
+            # Store color analysis results if available
+            if color_results:
+                analysis_results['color_data'] = color_results
+            
+            # ===== GENERATE PDF REPORT =====
+            st.markdown("---")
+            st.header("📄 Laporan PDF")
+            
+            if analysis_results and 'kontur' in analysis_results:
+                with st.spinner("Membuat laporan PDF lengkap..."):
+                    try:
+                        pdf_path = st.session_state.pdf_generator.create_analysis_report(
+                            analysis_results['citra_asli'],
+                            analysis_results['citra_threshold'],
+                            analysis_results['citra_base'],
+                            analysis_results['citra_proses_rgb'],
+                            analysis_results['kontur'],
+                            analysis_results['faktor_skala'],
+                            analysis_results['shape_2d'],
+                            analysis_results['shape_3d'],
+                            analysis_results['confidence'],
+                            analysis_results['properties'],
+                            analysis_results['parameter_terbaik'],
+                            analysis_results.get('color_data', None)
+                        )
+                        
+                        # Provide download button
+                        with open(pdf_path, "rb") as pdf_file:
+                            st.download_button(
+                                label="📥 Unduh Laporan PDF Lengkap",
+                                data=pdf_file.read(),
+                                file_name=f"laporan_analisis_citra_lengkap_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                mime="application/pdf",
+                                type="primary"
+                            )
+                        
+                        st.success("✅ Laporan PDF lengkap berhasil dibuat! Laporan mencakup analisis geometri dan segmentasi warna.")
+                        st.info("📋 Laporan berisi: Cover & Ringkasan, Visualisasi Kontur, Properti Geometri, Analisis Warna, dan Statistik Warna")
+                        
+                        # Auto-download functionality using JavaScript
+                        st.markdown("""
+                        <script>
+                        // Auto-download functionality
+                        setTimeout(function() {
+                            const downloadButton = document.querySelector('[data-testid="stDownloadButton"] button');
+                            if (downloadButton) {
+                                downloadButton.click();
+                            }
+                        }, 2000);
+                        </script>
+                        """, unsafe_allow_html=True)
+                        
+                        # Cleanup PDF file
+                        if os.path.exists(pdf_path):
+                            os.unlink(pdf_path)
+                            
+                    except Exception as e:
+                        st.error(f"Error saat membuat PDF: {str(e)}")
+                        import traceback
+                        st.error(traceback.format_exc())
             
             os.unlink(temp_file_path)
         

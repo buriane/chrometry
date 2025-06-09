@@ -4,3 +4,6 @@ numpy==2.1.1
 matplotlib==3.9.2
 scikit-learn==1.5.2
 plotly==5.18.0
+Pillow
+tempfile
+reportlab
